@@ -8,32 +8,30 @@ import requests
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 
-# Загружаем переменные из .env для локального запуска
 load_dotenv()
 
 api = Flask(__name__)
 
-# --- 1. НАСТРОЙКИ (Читаем из переменных окружения Render) ---
+# --- 1. НАСТРОЙКИ ---
 BITRIX24_WEBHOOK = os.getenv("BITRIX24_WEBHOOK")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_TOKEN")
 DEAL_CATEGORY_ID = int(os.getenv("DEAL_CATEGORY_ID", 42))
 DEAL_STAGE_ID = os.getenv("DEAL_STAGE_ID", "8704")
 FIELD_LINK_CODE = os.getenv("FIELD_LINK_CODE", "UF_CRM_1774428455758")
 FIELD_COMPANY_DIRECTION = os.getenv("FIELD_COMPANY_DIRECTION", "UF_CRM_1774954195201")
-# ID корневой папки на Google Drive (ОБЯЗАТЕЛЬНО УКАЗАТЬ)
 GOOGLE_DRIVE_ROOT_FOLDER_ID = os.getenv("GOOGLE_DRIVE_ROOT_FOLDER_ID")
 
-# --- 2. КОНСТАНТЫ ДЛЯ DEEPSEEK API ---
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 
-# --- 3. ПРОМПТ ДЛЯ DEEPSEEK (скопируйте ваш полный текст) ---
+# --- 2. ПРОМПТ (полный текст, сокращён для примера, замените на свой) ---
 PROMPT = """
-(скопируйте сюда ваш полный промпт)
+Во вложении техническая документация по закупке.
+Проанализируй документы и предоставь подробную информацию в отчет удобный для копирования в документ WORD...
+(ваш полный промпт)
 """
 
-# --- 4. ФУНКЦИИ ДЛЯ РАБОТЫ С БИТРИКС24 ---
+# --- 3. ФУНКЦИИ БИТРИКС24 ---
 def call_bitrix24(method, params):
-    """Универсальный вызов REST API Битрикс24."""
     url = f"{BITRIX24_WEBHOOK}{method}"
     try:
         resp = requests.post(url, json=params, timeout=60)
@@ -43,7 +41,6 @@ def call_bitrix24(method, params):
         return {"error": str(e)}
 
 def get_enum_value_id(field_name, target_value):
-    """Получает ID значения 'target_value' для пользовательского поля-списка."""
     fields_response = call_bitrix24("crm.company.fields", {})
     if "error" in fields_response:
         raise Exception(f"Не удалось получить поля компаний: {fields_response['error']}")
@@ -56,7 +53,6 @@ def get_enum_value_id(field_name, target_value):
     raise Exception(f"Значение '{target_value}' не найдено для поля {field_name}")
 
 def find_company_by_inn(inn):
-    """Поиск компании по ИНН через реквизиты."""
     result = call_bitrix24("crm.requisite.list", {
         "filter": {"RQ_INN": inn},
         "select": ["ID", "ENTITY_TYPE_ID", "ENTITY_ID"]
@@ -71,7 +67,6 @@ def find_company_by_inn(inn):
     return None
 
 def create_company(company_name, inn):
-    """Создание компании + реквизиты + поле 'Направление компании'."""
     direction_id = get_enum_value_id(FIELD_COMPANY_DIRECTION, "НВ")
     company_res = call_bitrix24("crm.company.add", {
         "fields": {
@@ -82,8 +77,6 @@ def create_company(company_name, inn):
     company_id = company_res.get("result")
     if not company_id:
         raise Exception(f"Ошибка создания компании: {company_res}")
-
-    # Получаем шаблон реквизитов
     presets = call_bitrix24("crm.requisite.preset.list", {})
     preset_id = 1
     if presets.get("result"):
@@ -91,8 +84,6 @@ def create_company(company_name, inn):
             if "юр" in p.get("NAME", "").lower() or "organiz" in p.get("NAME", "").lower():
                 preset_id = p["ID"]
                 break
-
-    # Добавляем реквизиты с ИНН
     call_bitrix24("crm.requisite.add", {
         "fields": {
             "ENTITY_TYPE_ID": 4,
@@ -105,9 +96,9 @@ def create_company(company_name, inn):
     return company_id
 
 def create_contact(name, phone, email, company_id):
-    """Создание контакта и привязка к компании."""
     if not any([name, phone, email]):
         return None
+    # Без преобразований телефона — оставляем как есть
     contact_res = call_bitrix24("crm.contact.add", {
         "fields": {
             "NAME": name or "",
@@ -124,7 +115,6 @@ def create_contact(name, phone, email, company_id):
     return contact_id
 
 def create_deal(company_id, deal_name, purchase_link):
-    """Создание сделки в нужной воронке и статусе."""
     deal_res = call_bitrix24("crm.deal.add", {
         "fields": {
             "TITLE": deal_name,
@@ -136,12 +126,9 @@ def create_deal(company_id, deal_name, purchase_link):
     })
     return deal_res.get("result")
 
-# --- 5. ФУНКЦИИ ДЛЯ ФОРМАТИРОВАНИЯ ТЕКСТА (MARKDOWN -> BBCODE) ---
 def markdown_table_to_bbcode(table_lines):
-    """Преобразует Markdown-таблицу в BBCode [table]."""
     if len(table_lines) < 2:
         return '\n'.join(table_lines)
-    # Парсим заголовки
     header_line = table_lines[0].strip('|').split('|')
     headers = [h.strip() for h in header_line]
     data_rows = []
@@ -149,7 +136,6 @@ def markdown_table_to_bbcode(table_lines):
         cells = line.strip('|').split('|')
         row = [c.strip() for c in cells]
         data_rows.append(row)
-    # Формируем BBCode
     bbcode = '[table]\n'
     bbcode += '[tr]' + ''.join(f'[th]{h}[/th]' for h in headers) + '[/tr]\n'
     for row in data_rows:
@@ -158,7 +144,6 @@ def markdown_table_to_bbcode(table_lines):
     return bbcode
 
 def markdown_to_bbcode(text):
-    """Преобразует Markdown в BBCode для Битрикс24 с поддержкой таблиц."""
     lines = text.split('\n')
     result = []
     i = 0
@@ -172,7 +157,6 @@ def markdown_to_bbcode(text):
             result.append(markdown_table_to_bbcode(table_lines))
             continue
         else:
-            # Жирный, курсив, заголовки, списки
             line = re.sub(r'\*\*(.*?)\*\*', r'[b]\1[/b]', line)
             line = re.sub(r'__(.*?)__', r'[b]\1[/b]', line)
             line = re.sub(r'\*(.*?)\*', r'[i]\1[/i]', line)
@@ -190,48 +174,39 @@ def markdown_to_bbcode(text):
     return full_text
 
 def add_comment_to_deal(deal_id, comment_text):
-    """Добавляет отформатированный комментарий в таймлайн сделки."""
     formatted_comment = markdown_to_bbcode(comment_text)
     params = {"fields": {"ENTITY_ID": deal_id, "ENTITY_TYPE": "deal", "COMMENT": formatted_comment}}
     return call_bitrix24("crm.timeline.comment.add", params)
 
-# --- 6. ФУНКЦИИ ДЛЯ РАБОТЫ С GOOGLE DRIVE ---
+# --- 4. РАБОТА С GOOGLE DRIVE (через gdown) ---
 def find_subfolder_id(parent_folder_id, subfolder_name):
-    """Находит ID подпапки в публичной папке Google Drive."""
-    api_key = "AIzaSyC4qZpJZ6KzqBQyQ6xq9Fp0lX0sx8N0wA"  # Публичный ключ, работает только для публичных данных
-    query = f"'{parent_folder_id}' in parents and name='{subfolder_name}' and mimeType='application/vnd.google-apps.folder'"
-    url = f"https://www.googleapis.com/drive/v3/files?q={requests.utils.quote(query)}&key={api_key}&fields=files(id,name)"
+    import gdown
     try:
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        files = data.get('files', [])
-        return files[0]['id'] if files else None
+        contents = gdown.list_folder(parent_folder_id, use_cookies=False)
+        for item in contents:
+            if item['type'] == 'folder' and item['name'] == subfolder_name:
+                return item['id']
+        return None
     except Exception as e:
-        print(f"Ошибка поиска подпапки: {e}")
+        print(f"Ошибка поиска подпапки через gdown: {e}")
         return None
 
 def download_public_folder_files(folder_id, destination_dir):
-    """Скачивает все файлы из публичной папки Google Drive во временную директорию."""
     import gdown
     try:
-        # gdown.download_folder рекурсивно скачивает все файлы из публичной папки
-        # use_cookies=False необходимо для обхода предупреждений Google
         gdown.download_folder(id=folder_id, output=destination_dir, use_cookies=False)
-        # Возвращаем список путей к скачанным файлам
         downloaded_files = []
         for root, dirs, files in os.walk(destination_dir):
             for file in files:
-                if not file.endswith('.html'):  # Иногда скачиваются лишние html-файлы
+                if not file.endswith('.html'):
                     downloaded_files.append(os.path.join(root, file))
         return downloaded_files
     except Exception as e:
         print(f"Ошибка скачивания папки {folder_id}: {e}")
         return []
 
-# --- 7. ФУНКЦИИ ДЛЯ РАБОТЫ С DEEPSEEK ---
+# --- 5. ФУНКЦИИ ДЛЯ DEEPSEEK ---
 def extract_text_from_file(file_path):
-    """Извлекает текст из файлов разных форматов."""
     ext = os.path.splitext(file_path)[1].lower()
     try:
         if ext == '.pdf':
@@ -266,7 +241,6 @@ def extract_text_from_file(file_path):
         return ""
 
 def analyze_with_deepseek(file_paths):
-    """Отправляет текст извлеченных файлов в DeepSeek API и возвращает ответ."""
     full_text = ""
     for path in file_paths:
         text = extract_text_from_file(path)
@@ -277,7 +251,6 @@ def analyze_with_deepseek(file_paths):
     if len(full_text) > 300000:
         full_text = full_text[:300000] + "...\n[Текст документа обрезан из-за ограничения длины]"
     
-    # Формируем полный промпт
     user_prompt = f"{PROMPT}\n\nТекст документов:\n{full_text}"
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
@@ -301,10 +274,8 @@ def analyze_with_deepseek(file_paths):
         print(f"Ошибка при запросе к DeepSeek API: {e}")
         raise
 
-# --- 8. ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ---
+# --- 6. ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ---
 def process_purchase(data):
-    """Обрабатывает закупку: создаёт сущности в Битрикс24, скачивает файлы из Google Drive и отправляет в DeepSeek."""
-    # 1. Поиск/создание компании
     company_id = find_company_by_inn(data["inn"])
     if not company_id:
         company_id = create_company(data["company_name"], data["inn"])
@@ -312,69 +283,55 @@ def process_purchase(data):
     else:
         print(f"Компания уже существует, ID {company_id}")
 
-    # 2. Создание контакта и сделки
     create_contact(data.get("contact_name"), data.get("phone"), data.get("email"), company_id)
     deal_id = create_deal(company_id, data["company_name"], data.get("purchase_link", ""))
     print(f"Создана сделка ID {deal_id}")
 
-    # 3. Работа с файлами из Google Drive
     purchase_number = data["purchase_number"]
     print(f"Поиск папки с номером {purchase_number} в Google Drive")
-    
-    # Находим ID папки закупки
+
     target_folder_id = find_subfolder_id(GOOGLE_DRIVE_ROOT_FOLDER_ID, purchase_number)
     if not target_folder_id:
         return {"status": "error", "message": f"В корневой папке Google Drive не найдена подпапка с именем {purchase_number}"}
-    
-    # Создаём временную папку для скачивания
+
     temp_dir = tempfile.mkdtemp()
     try:
         print(f"Скачивание файлов из папки {purchase_number}...")
         downloaded_files = download_public_folder_files(target_folder_id, temp_dir)
         if not downloaded_files:
             return {"status": "error", "message": f"Не удалось скачать файлы из папки {purchase_number}"}
-        
         print(f"Успешно скачано файлов: {len(downloaded_files)}")
         for f in downloaded_files:
             print(f"  - {os.path.basename(f)}")
-        
-        # 4. Отправка в DeepSeek
+
         print("Отправка файлов в DeepSeek...")
         analysis = analyze_with_deepseek(downloaded_files)
-        
-        # 5. Добавление комментария в сделку
+
         comment_text = f"🤖 Анализ от DeepSeek:\n\n{analysis}"
         add_comment_to_deal(deal_id, comment_text)
         print("Комментарий добавлен в сделку")
-        
+
         return {"status": "success", "deal_id": deal_id, "analysis_preview": analysis[:300]}
     finally:
-        # Очистка временной папки
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-# --- 9. ТОЧКА ВХОДА ДЛЯ FLASK-СЕРВЕРА ---
+# --- 7. ТОЧКА ВХОДА ДЛЯ FLASK ---
 @api.route('/process', methods=['POST'])
 def process_webhook():
-    """Обрабатывает POST-запросы от Google Apps Script."""
     try:
         data = request.get_json()
         if not data:
             return jsonify({"status": "error", "message": "Нет данных"}), 400
-        
-        # Валидация обязательных полей
         required = ["inn", "company_name", "purchase_number"]
         for field in required:
             if field not in data:
                 return jsonify({"status": "error", "message": f"В запросе отсутствует поле '{field}'"}), 400
-        
         result = process_purchase(data)
         return jsonify(result)
     except Exception as e:
         print(f"Ошибка в процессе обработки: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# --- 10. ЗАПУСК ---
 if __name__ == "__main__":
-    # Для локальных тестов
     port = int(os.environ.get("PORT", 5000))
     api.run(host='0.0.0.0', port=port)
