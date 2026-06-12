@@ -5,6 +5,7 @@ import re
 import tempfile
 import shutil
 import requests
+from urllib.parse import quote
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 
@@ -23,11 +24,10 @@ GOOGLE_DRIVE_ROOT_FOLDER_ID = os.getenv("GOOGLE_DRIVE_ROOT_FOLDER_ID")
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 
-# --- 2. ПРОМПТ (полный текст, сокращён для примера, замените на свой) ---
+# --- 2. ПРОМПТ (замените на свой полный текст) ---
 PROMPT = """
-Во вложении техническая документация по закупке.
-Проанализируй документы и предоставь подробную информацию в отчет удобный для копирования в документ WORD...
-(ваш полный промпт)
+Во вложении техническая документация по закупке...
+(весь ваш промпт)
 """
 
 # --- 3. ФУНКЦИИ БИТРИКС24 ---
@@ -98,7 +98,6 @@ def create_company(company_name, inn):
 def create_contact(name, phone, email, company_id):
     if not any([name, phone, email]):
         return None
-    # Без преобразований телефона — оставляем как есть
     contact_res = call_bitrix24("crm.contact.add", {
         "fields": {
             "NAME": name or "",
@@ -178,20 +177,27 @@ def add_comment_to_deal(deal_id, comment_text):
     params = {"fields": {"ENTITY_ID": deal_id, "ENTITY_TYPE": "deal", "COMMENT": formatted_comment}}
     return call_bitrix24("crm.timeline.comment.add", params)
 
-# --- 4. РАБОТА С GOOGLE DRIVE (через gdown) ---
+# --- 4. ПОИСК ПАПКИ НА GOOGLE DRIVE (через API, без gdown) ---
 def find_subfolder_id(parent_folder_id, subfolder_name):
-    import gdown
+    """Находит ID подпапки в публичной папке Google Drive через API v3."""
+    api_key = "AIzaSyC4qZpJZ6KzqBQyQ6xq9Fp0lX0sx8N0wA"  # публичный ключ Google
+    escaped_name = quote(subfolder_name)
+    query = f"'{parent_folder_id}' in parents and name='{escaped_name}' and mimeType='application/vnd.google-apps.folder'"
+    url = f"https://www.googleapis.com/drive/v3/files?q={query}&key={api_key}&fields=files(id,name)"
     try:
-        contents = gdown.list_folder(parent_folder_id, use_cookies=False)
-        for item in contents:
-            if item['type'] == 'folder' and item['name'] == subfolder_name:
-                return item['id']
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        files = data.get('files', [])
+        if files:
+            return files[0]['id']
         return None
     except Exception as e:
-        print(f"Ошибка поиска подпапки через gdown: {e}")
+        print(f"Ошибка поиска подпапки через API: {e}")
         return None
 
 def download_public_folder_files(folder_id, destination_dir):
+    """Скачивает все файлы из публичной папки Google Drive с помощью gdown."""
     import gdown
     try:
         gdown.download_folder(id=folder_id, output=destination_dir, use_cookies=False)
@@ -274,7 +280,7 @@ def analyze_with_deepseek(file_paths):
         print(f"Ошибка при запросе к DeepSeek API: {e}")
         raise
 
-# --- 6. ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ---
+# --- 6. ОСНОВНАЯ ЛОГИКА ---
 def process_purchase(data):
     company_id = find_company_by_inn(data["inn"])
     if not company_id:
@@ -315,7 +321,6 @@ def process_purchase(data):
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-# --- 7. ТОЧКА ВХОДА ДЛЯ FLASK ---
 @api.route('/process', methods=['POST'])
 def process_webhook():
     try:
