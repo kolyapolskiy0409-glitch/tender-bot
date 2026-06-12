@@ -2,7 +2,8 @@ Flask
 gunicorn
 requests
 python-dotenv
-gdown
+gdown>=4.7.0
+beautifulsoup4
 PyPDF2
 python-docx
 openpyxl
