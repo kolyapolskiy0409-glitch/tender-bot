@@ -5,35 +5,34 @@ import re
 import tempfile
 import shutil
 import requests
+from urllib.parse import quote, urljoin
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
-
-# Импортируем gdown для работы с Google Drive
+from bs4 import BeautifulSoup
 import gdown
 
 load_dotenv()
 
 api = Flask(__name__)
 
-# --- 1. НАСТРОЙКИ (читаем из переменных окружения) ---
+# --- 1. НАСТРОЙКИ ---
 BITRIX24_WEBHOOK = os.getenv("BITRIX24_WEBHOOK")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_TOKEN")
 DEAL_CATEGORY_ID = int(os.getenv("DEAL_CATEGORY_ID", 42))
 DEAL_STAGE_ID = os.getenv("DEAL_STAGE_ID", "8704")
 FIELD_LINK_CODE = os.getenv("FIELD_LINK_CODE", "UF_CRM_1774428455758")
 FIELD_COMPANY_DIRECTION = os.getenv("FIELD_COMPANY_DIRECTION", "UF_CRM_1774954195201")
-# ID корневой папки на Google Drive
 GOOGLE_DRIVE_ROOT_FOLDER_ID = os.getenv("GOOGLE_DRIVE_ROOT_FOLDER_ID")
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 
-# --- 2. ПРОМПТ ДЛЯ DEEPSEEK (замените на свой полный текст) ---
+# --- 2. ПРОМПТ (замените на свой) ---
 PROMPT = """
 Во вложении техническая документация по закупке...
-(скопируйте ваш полный промпт)
+(весь ваш промпт)
 """
 
-# --- 3. ФУНКЦИИ ДЛЯ РАБОТЫ С БИТРИКС24 ---
+# --- 3. ФУНКЦИИ БИТРИКС24 (без изменений) ---
 def call_bitrix24(method, params):
     url = f"{BITRIX24_WEBHOOK}{method}"
     try:
@@ -80,8 +79,6 @@ def create_company(company_name, inn):
     company_id = company_res.get("result")
     if not company_id:
         raise Exception(f"Ошибка создания компании: {company_res}")
-
-    # Получаем шаблон реквизитов
     presets = call_bitrix24("crm.requisite.preset.list", {})
     preset_id = 1
     if presets.get("result"):
@@ -89,11 +86,9 @@ def create_company(company_name, inn):
             if "юр" in p.get("NAME", "").lower() or "organiz" in p.get("NAME", "").lower():
                 preset_id = p["ID"]
                 break
-
-    # Добавляем реквизиты с ИНН
     call_bitrix24("crm.requisite.add", {
         "fields": {
-            "ENTITY_TYPE_ID": 4,  # 4 = Компания
+            "ENTITY_TYPE_ID": 4,
             "ENTITY_ID": company_id,
             "PRESET_ID": preset_id,
             "NAME": company_name,
@@ -184,44 +179,63 @@ def add_comment_to_deal(deal_id, comment_text):
     params = {"fields": {"ENTITY_ID": deal_id, "ENTITY_TYPE": "deal", "COMMENT": formatted_comment}}
     return call_bitrix24("crm.timeline.comment.add", params)
 
-# --- 4. НОВАЯ ЛОГИКА РАБОТЫ С GOOGLE DRIVE (через gdown) ---
-def find_subfolder_id_by_gdown(parent_folder_id, target_name):
+# --- 4. НОВАЯ ФУНКЦИЯ ПОИСКА ПОДПАПКИ ЧЕРЕЗ ПАРСИНГ HTML ---
+def find_subfolder_id_by_parsing(parent_folder_id, target_name):
     """
-    Находит ID подпапки в публичной папке Google Drive.
-    Использует gdown для получения списка содержимого.
+    Парсит HTML страницу публичной папки Google Drive,
+    находит ссылку на подпапку с именем target_name и возвращает её ID.
     """
+    url = f"https://drive.google.com/drive/folders/{parent_folder_id}"
+    print(f"Открываем страницу корневой папки: {url}")
     try:
-        # gdown.list_folder возвращает список словарей с содержимым папки
-        folder_contents = gdown.list_folder(parent_folder_id, use_cookies=False)
-        for item in folder_contents:
-            # Ищем папку (type == 'folder') с нужным именем
-            if item['type'] == 'folder' and item['name'] == target_name:
-                print(f"Найдена папка '{target_name}' с ID {item['id']}")
-                return item['id']
-        print(f"Папка с именем '{target_name}' не найдена.")
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        # Ищем все ссылки, которые содержат '/drive/folders/'
+        links = soup.find_all('a', href=re.compile(r'/drive/folders/'))
+        for link in links:
+            href = link.get('href')
+            # Извлекаем название папки из текста ссылки или из атрибута aria-label
+            folder_name = None
+            # Попробуем найти элемент с классом, содержащим название
+            # Часто название папки находится в <div class="WpHeLc VY20Jd"> или в атрибуте aria-label
+            parent = link.find_parent()
+            if parent:
+                name_div = parent.find('div', class_=re.compile(r'WpHeLc|VY20Jd|T5pZmf'))
+                if name_div:
+                    folder_name = name_div.get_text(strip=True)
+            if not folder_name:
+                # Если не нашли, пробуем взять текст самой ссылки
+                folder_name = link.get_text(strip=True)
+            if folder_name == target_name:
+                # Извлекаем ID из href
+                match = re.search(r'/drive/folders/([a-zA-Z0-9_-]+)', href)
+                if match:
+                    folder_id = match.group(1)
+                    print(f"Найдена подпапка '{target_name}' с ID {folder_id}")
+                    return folder_id
+        print(f"Подпапка с именем '{target_name}' не найдена на странице")
         return None
     except Exception as e:
-        print(f"Ошибка при получении списка папки {parent_folder_id}: {e}")
+        print(f"Ошибка парсинга страницы {url}: {e}")
         return None
 
-def download_public_folder_files(folder_id, destination_dir):
-    """Скачивает все файлы из публичной папки Google Drive с помощью gdown."""
+# --- 5. ФУНКЦИИ ДЛЯ СКАЧИВАНИЯ И АНАЛИЗА ---
+def download_folder_by_id(folder_id, destination_dir):
     try:
-        # Используем gdown для рекурсивного скачивания папки
+        print(f"Скачивание папки с ID {folder_id}")
         gdown.download_folder(id=folder_id, output=destination_dir, use_cookies=False, quiet=False)
-        # Собираем все скачанные файлы
         downloaded_files = []
         for root, dirs, files in os.walk(destination_dir):
             for file in files:
-                # Игнорируем служебные файлы, если такие появятся
-                if not file.endswith('.html'):
+                if not file.endswith('.html') and not file.startswith('.'):
                     downloaded_files.append(os.path.join(root, file))
+        print(f"Скачано файлов: {len(downloaded_files)}")
         return downloaded_files
     except Exception as e:
-        print(f"Ошибка скачивания папки {folder_id}: {e}")
+        print(f"Ошибка скачивания: {e}")
         return []
 
-# --- 5. ФУНКЦИИ ДЛЯ РАБОТЫ С DEEPSEEK (извлечение текста) ---
 def extract_text_from_file(file_path):
     ext = os.path.splitext(file_path)[1].lower()
     try:
@@ -264,36 +278,24 @@ def analyze_with_deepseek(file_paths):
             full_text += f"\n\n--- Файл: {os.path.basename(path)} ---\n{text}\n"
     if not full_text.strip():
         raise Exception("Не удалось извлечь текст из файлов")
-    # Обрезаем текст, чтобы не превысить лимит токенов
     if len(full_text) > 300000:
-        full_text = full_text[:300000] + "...\n[Текст документа обрезан из-за ограничения длины]"
-    
+        full_text = full_text[:300000] + "...\n[Обрезано]"
     user_prompt = f"{PROMPT}\n\nТекст документов:\n{full_text}"
-    headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "deepseek-chat",
         "messages": [{"role": "user", "content": user_prompt}],
         "temperature": 0.3,
         "max_tokens": 4000
     }
-    try:
-        response = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=120)
-        response.raise_for_status()
-        result = response.json()
-        if "choices" in result and len(result["choices"]) > 0:
-            return result["choices"][0]["message"]["content"]
-        else:
-            raise Exception("Неожиданный формат ответа от DeepSeek API")
-    except Exception as e:
-        print(f"Ошибка при запросе к DeepSeek API: {e}")
-        raise
+    response = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=120)
+    response.raise_for_status()
+    result = response.json()
+    return result["choices"][0]["message"]["content"]
 
-# --- 6. ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ---
+# --- 6. ОСНОВНАЯ ЛОГИКА ---
 def process_purchase(data):
-    # 1. Поиск/создание компании
+    # CRM часть
     company_id = find_company_by_inn(data["inn"])
     if not company_id:
         company_id = create_company(data["company_name"], data["inn"])
@@ -301,47 +303,31 @@ def process_purchase(data):
     else:
         print(f"Компания уже существует, ID {company_id}")
 
-    # 2. Создание контакта и сделки
     create_contact(data.get("contact_name"), data.get("phone"), data.get("email"), company_id)
     deal_id = create_deal(company_id, data["company_name"], data.get("purchase_link", ""))
     print(f"Создана сделка ID {deal_id}")
 
-    # 3. Работа с файлами из Google Drive
+    # Поиск подпапки по номеру закупки (автоматически)
     purchase_number = data["purchase_number"]
-    print(f"Поиск папки с номером {purchase_number} в Google Drive...")
+    print(f"Поиск папки для закупки {purchase_number} в корневой папке Google Drive...")
+    subfolder_id = find_subfolder_id_by_parsing(GOOGLE_DRIVE_ROOT_FOLDER_ID, purchase_number)
+    if not subfolder_id:
+        return {"status": "error", "message": f"Не найдена подпапка с именем {purchase_number} в корневой папке. Проверьте, что папка существует и корневая папка открыта для общего доступа."}
 
-    # Находим ID нужной подпапки
-    target_folder_id = find_subfolder_id_by_gdown(GOOGLE_DRIVE_ROOT_FOLDER_ID, purchase_number)
-    if not target_folder_id:
-        return {"status": "error", "message": f"В корневой папке Google Drive не найдена подпапка с именем {purchase_number}. Проверьте, что она существует и корневая папка опубликована как общедоступная."}
-
-    # Создаём временную папку для скачивания
     temp_dir = tempfile.mkdtemp()
     try:
-        print(f"Скачивание файлов из папки {purchase_number}...")
-        downloaded_files = download_public_folder_files(target_folder_id, temp_dir)
+        downloaded_files = download_folder_by_id(subfolder_id, temp_dir)
         if not downloaded_files:
-            return {"status": "error", "message": f"Не удалось скачать файлы из папки {purchase_number}. Возможно, папка пуста или в ней нет поддерживаемых файлов."}
-        
-        print(f"Успешно скачано файлов: {len(downloaded_files)}")
-        for f in downloaded_files:
-            print(f"  - {os.path.basename(f)}")
-
-        # 4. Отправка в DeepSeek
-        print("Отправка файлов в DeepSeek...")
+            return {"status": "error", "message": f"Не удалось скачать файлы из папки {purchase_number}"}
+        print("Отправка в DeepSeek...")
         analysis = analyze_with_deepseek(downloaded_files)
-
-        # 5. Добавление комментария в сделку
         comment_text = f"🤖 Анализ от DeepSeek:\n\n{analysis}"
         add_comment_to_deal(deal_id, comment_text)
-        print("Комментарий добавлен в сделку")
-
+        print("Комментарий добавлен")
         return {"status": "success", "deal_id": deal_id, "analysis_preview": analysis[:300]}
     finally:
-        # Очистка временной папки
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-# --- 7. ТОЧКА ВХОДА ДЛЯ FLASK-СЕРВЕРА ---
 @api.route('/process', methods=['POST'])
 def process_webhook():
     try:
@@ -355,7 +341,7 @@ def process_webhook():
         result = process_purchase(data)
         return jsonify(result)
     except Exception as e:
-        print(f"Ошибка в процессе обработки: {e}")
+        print(f"Ошибка: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == "__main__":
