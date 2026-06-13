@@ -278,24 +278,31 @@ def analyze_with_deepseek(file_paths):
     if not full_text.strip():
         raise Exception("Не удалось извлечь текст из файлов")
     if len(full_text) > 300000:
-        full_text = full_text[:300000] + "...\n[Текст документа обрезан из-за ограничения длины]"
+        full_text = full_text[:300000] + "...\n[Текст документа обрезан]"
     
     user_prompt = f"{PROMPT}\n\nТекст документов:\n{full_text}"
     headers = {
-    "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-    "Content-Type": "application/json",
-    "Referer": "https://chat.deepseek.com",
-    "Origin": "https://chat.deepseek.com",
-    "User-Agent": "Mozilla/5.0 (compatible; DeepSeek-Bot/1.0)"
-}
-    payload = {
-        "model": "deepseek-chat",
-        "messages": [{"role": "user", "content": user_prompt}],
-        "temperature": 0.3,
-        "max_tokens": 4000
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json",
+        "Referer": "https://chat.deepseek.com",
+        "Origin": "https://chat.deepseek.com",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
+    # Исправленный URL (попробуем оба варианта, пока выберем тот, что использовали ранее)
+    # DEEPSEEK_API_URL = "https://chat.deepseek.com/api/v0/chat/completions"
+    # Если не сработает, закомментируйте строку выше и раскомментируйте ниже:
+    DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
+    
+    print(f"Отправка запроса к {DEEPSEEK_API_URL}")
     try:
-        response = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=120)
+        response = requests.post(DEEPSEEK_API_URL, headers=headers, json={
+            "model": "deepseek-chat",
+            "messages": [{"role": "user", "content": user_prompt}],
+            "temperature": 0.3,
+            "max_tokens": 4000
+        }, timeout=120)
+        print(f"Статус ответа: {response.status_code}")
+        print(f"Тело ответа (первые 500 символов): {response.text[:500]}")
         response.raise_for_status()
         result = response.json()
         if "choices" in result and len(result["choices"]) > 0:
@@ -304,6 +311,7 @@ def analyze_with_deepseek(file_paths):
             raise Exception("Неожиданный формат ответа от DeepSeek API")
     except Exception as e:
         print(f"Ошибка при запросе к DeepSeek API: {e}")
+        print(f"Полный ответ: {response.text if 'response' in locals() else 'Нет ответа'}")
         raise
 
 # --- 6. ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ---
