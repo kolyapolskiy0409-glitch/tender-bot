@@ -297,7 +297,7 @@ def analyze_with_deepseek(file_paths):
     if not full_text.strip():
         raise Exception("Не удалось извлечь текст из файлов")
     if len(full_text) > 800000:
-        full_text = full_text[:800000] + "...\n[Текст документа обрезан из-за ограничения длины]"
+        full_text = full_text[:800000] + "...\n[Текст документа обрезан]"
 
     user_prompt = f"{PROMPT}\n\nТекст документов:\n{full_text}"
     headers = {
@@ -311,23 +311,40 @@ def analyze_with_deepseek(file_paths):
         "max_tokens": 4000
     }
     try:
-        print(f"Отправка запроса к KodikRouter, модель: {DEEPSEEK_MODEL}")
-        # Увеличенный таймаут – 180 секунд
+        print("Отправка запроса к KodikRouter...")
         response = requests.post(DEEPSEEK_URL, headers=headers, json=payload, timeout=180)
-        print(f"Статус ответа KodikRouter: {response.status_code}")
+        print(f"Статус: {response.status_code}")
         response.raise_for_status()
-        result = response.json()
-        if "choices" in result and len(result["choices"]) > 0:
-            return result["choices"][0]["message"]["content"]
+        data = response.json()
+        # Сохраним полный ответ в файл для отладки (не обязательно)
+        with open("/tmp/kodik_response.json", "w") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        # Пытаемся извлечь content
+        content = None
+        if isinstance(data, dict):
+            # Стандартный OpenAI
+            if "choices" in data and len(data["choices"]) > 0:
+                msg = data["choices"][0].get("message")
+                if msg and isinstance(msg, dict):
+                    content = msg.get("content")
+            # Если нет, пробуем другие возможные поля
+            if not content and "content" in data:
+                content = data["content"]
+            if not content and "response" in data:
+                content = data["response"]
+        elif isinstance(data, str):
+            content = data
+        
+        if content and isinstance(content, str):
+            return content
         else:
-            raise Exception("Неожиданный формат ответа от KodikRouter")
-    except requests.exceptions.Timeout:
-        print("Таймаут запроса к KodikRouter (180 сек)")
-        raise Exception("Таймаут при обращении к KodikRouter")
+            print(f"Не удалось извлечь content. Тип data: {type(data)}")
+            print(f"Содержимое data: {json.dumps(data, ensure_ascii=False)[:500]}")
+            raise Exception("Пустой ответ от KodikRouter")
     except Exception as e:
-        print(f"Ошибка DeepSeek: {e}")
+        print(f"Ошибка: {e}")
         if hasattr(e, 'response') and e.response is not None:
-            print(f"Статус: {e.response.status_code}, тело: {e.response.text[:500]}")
+            print(f"Тело ошибки: {e.response.text[:500]}")
         raise
 
 # ========== 5. ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ==========
