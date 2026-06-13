@@ -12,3 +12,7 @@ python-docx
 openpyxl
 gdown
 openai>=1.0.0
+pandas
+PyMuPDF
+pytesseract
+Pillow
