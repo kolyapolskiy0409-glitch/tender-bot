@@ -2,6 +2,7 @@ import os
 import tempfile
 import shutil
 import requests
+import json
 from flask import Flask, request, jsonify
 from openai import OpenAI
 from docx import Document
@@ -57,12 +58,10 @@ def extract_text_from_image(file_path: str) -> str:
     except Exception as e:
         return f"[Ошибка OCR: {str(e)}]"
 
-# ================= СКАЧИВАНИЕ С GOOGLE DRIVE =================
 def download_file_from_google_drive(file_id: str, destination: str) -> None:
     URL = f"https://drive.google.com/uc?export=download&id={file_id}"
     session = requests.Session()
     response = session.get(URL, stream=True)
-    # Обход предупреждения о вирусах
     for key, value in response.cookies.items():
         if key.startswith('download_warning'):
             confirm_url = URL + "&confirm=" + value
@@ -75,9 +74,6 @@ def download_file_from_google_drive(file_id: str, destination: str) -> None:
 
 # ================= АНАЛИЗ ДОКУМЕНТОВ =================
 def analyze_documents(files_info: list) -> str:
-    """
-    files_info: [{"path": "локальный путь", "name": "имя файла"}, ...]
-    """
     all_texts = []
     for fi in files_info:
         path = fi["path"]
@@ -101,7 +97,6 @@ def analyze_documents(files_info: list) -> str:
     
     system_prompt = "Ты – эксперт по анализу тендерной документации."
     
-    # ПОЛНЫЙ ПРОМТ (ваш, без сокращений)
     user_prompt = f"""
 Во вложении техническая документация по закупке.
 Проанализируй документы и предоставь подробную информацию в отчёт, удобный для копирования в документ WORD:
@@ -171,23 +166,34 @@ def analyze_documents(files_info: list) -> str:
     except Exception as e:
         raise RuntimeError(f"Ошибка при запросе к KodikRouter: {str(e)}")
 
-# ================= FLASK ENDPOINT =================
+# ================= FLASK ENDPOINT (с поддержкой JSON и form-data) =================
 @app.route('/process', methods=['POST'])
 def process_webhook():
-    """
-    Ожидает JSON:
-    {
-      "files": [
-        {"id": "google_drive_file_id_1", "name": "document1.docx"},
-        {"id": "google_drive_file_id_2", "name": "реестр.xlsx"}
-      ]
-    }
-    """
-    data = request.get_json()
-    if not data or 'files' not in data:
-        return jsonify({"error": "Не передан массив 'files'"}), 400
+    # Логируем всё, что пришло
+    print("=== Received request ===")
+    print(f"Headers: {dict(request.headers)}")
+    print(f"Raw data: {request.get_data(as_text=True)}")
+    
+    # Пытаемся получить JSON
+    data = request.get_json(silent=True)
+    if not data:
+        # Если JSON нет, пробуем получить из form
+        data = request.form.to_dict()
+        if not data:
+            return jsonify({"error": "Не удалось распарсить запрос. Отправьте JSON с полем 'files'"}), 400
+    
+    # Если поле files не найдено, пробуем взять file_id напрямую (для простых тестов)
+    if 'files' not in data:
+        if 'file_id' in data and 'name' in data:
+            # Преобразуем одиночный файл в массив
+            data = {'files': [{'id': data['file_id'], 'name': data['name']}]}
+        else:
+            return jsonify({"error": "Не передан массив 'files' или поля 'file_id'/'name'"}), 400
     
     files_list = data['files']
+    if not isinstance(files_list, list):
+        return jsonify({"error": "Поле 'files' должно быть массивом"}), 400
+    
     temp_dir = tempfile.mkdtemp()
     downloaded_files = []
     
@@ -212,9 +218,7 @@ def process_webhook():
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-# ================= ТОЧКА ВХОДА ДЛЯ GUNICORN =================
+# ================= ТОЧКА ВХОДА =================
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
-
-# Приложение готово – Gunicorn будет использовать переменную `app`
