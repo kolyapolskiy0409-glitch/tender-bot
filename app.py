@@ -13,11 +13,13 @@ api = Flask(__name__)
 
 # ========== 1. НАСТРОЙКИ ==========
 BITRIX24_WEBHOOK = os.getenv("BITRIX24_WEBHOOK")
-DEEPSEEK_API_KEY = os.getenv("KODIK_API_KEY")          # Ключ от KodikRouter
+KODIK_API_KEY = os.getenv("KODIK_API_KEY")          # Ключ от KodikRouter (обязательно)
 DEAL_CATEGORY_ID = int(os.getenv("DEAL_CATEGORY_ID", 42))
 DEAL_STAGE_ID = os.getenv("DEAL_STAGE_ID", "8704")
-FIELD_LINK_CODE = os.getenv("FIELD_LINK_CODE", "UF_CRM_1774428455758")
-FIELD_COMPANY_DIRECTION = os.getenv("FIELD_COMPANY_DIRECTION", "UF_CRM_1774954195201")
+FIELD_LINK_CODE = os.getenv("FIELD_LINK_CODE", "UF_CRM_1774428455758")           # Ссылка на закупку
+FIELD_COMPANY_DIRECTION = os.getenv("FIELD_COMPANY_DIRECTION", "UF_CRM_1774954195201")  # Направление компании
+FIELD_DRIVE_FOLDER_LINK = "UF_CRM_1781350841203"    # НВ: Ссылка на документы закупки
+
 GOOGLE_DRIVE_ROOT_FOLDER_ID = os.getenv("GOOGLE_DRIVE_ROOT_FOLDER_ID")
 DRIVE_API_KEY = os.getenv("DRIVE_API_KEY")
 
@@ -25,48 +27,14 @@ DRIVE_API_KEY = os.getenv("DRIVE_API_KEY")
 DEEPSEEK_URL = "https://api.kodikrouter.ru/v1/chat/completions"
 DEEPSEEK_MODEL = "deepseek/deepseek-v4-pro"
 
-# Ваш промпт (полный текст, вставьте его)
+# Ваш промпт (вставьте полный текст)
 PROMPT = """
 Во вложении техническая документация по закупке.
 Проанализируй документы и предоставь подробную информацию в отчет удобный для копирования в документ WORD:
-1) Название кампании Заказчика, его ИНН и контакты сотрудников если такие представлены (с указанием номера телефона, почты, должности и ФИО). Отдельно выпиши ФИО представителя Заказчика подготовившего ТЗ. Так же кратко укажи чем занимается организация ее отрасль;
-2) Адреса проведения работ;
-3) Название закупки и обоснование для проведения работ, если такая информация есть;
-3.1 Есть ли общий выделенный бюджет на закупку? в смете или в НМЦ (Если в НМЦ возьми самую минимальную цену предложенную в КП)
-4) Перечисли указанные в документации: 
-4.1) Перечень оборудования (Например: котел/теплообменник/калорифер/реактор и т.д.), его наименование, его модель (Например: Visman vitomasx 200-WS или Alfa Laval	A15BW), количество оборудования, вид работ с этим оборудованием (Например: химическая промывка/механическая промывка/разборная промывка/Без разборная промывка),
-
-Важно! Всегда сначала проверь есть ли во вложенной документации необходимая информация, в случае если информация присутствует, напиши ее, если информации нет, то проверить ее наличие в открытом доступе интернет, если найти ее удалось со 100% точностью, то напиши результат с пометкой "из открытых источников", если найти в открытых источниках не удалось, то напиши "уточнить у Заказчика".
-
-Важно! Если работы предусматривают промывку котла/реактора/емкости или др. сосудов: необходимо указать объем водяной рубашки для этого оборудования.
-
-Важно! Если работы предусматривают промывку теплообменников, то прежде всего необходимо определить и указать его тип: пластинчатый, паянный кожухотрубный т.д., 
-Далее необходимо определить и указать вид промывки: для пластинчатых теплообменников это может быть разборная, без разборная, механическая промывка и другая указанная в документации. Для Паянных аппаратов, только без разборная, химическая если в Документации не указано иное. Для кожухотрубных может быть механическая, без разборная промывка. 
-Если промывка Разборная, то обязательно указать количество пластин в каждом теплообменнике их размеры пластин (высота и ширина), размер Ду(DN). Если работы предусматривают промывку теплообменников пластинчатых или паянных безразборно, то обязательно указать размер ДУ(Dn) присоединений и размеры пластин(высота и ширина). Если работы предусматривают промывку теплообменника кожухотрубного, то необходимо выяснить и указать объем этого теплообменника, количество трубок и их диаметр Ду(DN).
-
-Важно!! Если в документах Заказчика нет информации о размерах, объемах оборудования, то всегда сверься с приложенным файлом "Реестр оборудования и его размеров.xlsx" приложенным к запросу, информация из документов (ТЗ, паспорта) является приоритетной, обязательно напиши в таблице если взял данные из нашего реестра.
-Результат по пункту 4.1 выведи в формате таблицы.
-
-4.2 Укажи Перечень дополнительных требований к выполнению работ(Например: ультразвук, гидроипульсы, баражирование и т.д).
-4.3 Укажи требования к результатам работ и способ которым это будет фиксироваться;
-5) Укажи есть ли требования к подбору моющего средства (Например: требуется ли определенное средство, биоорганическое, кислотное, либо наоборот без содержания соляной кислоты и т.д.)
-Обязательно укажи требования по утилизации объема отработанного раствора/моющего средства.
-
-6) Укажи есть ли требования к персоналу? (Например: наличие определенных допусков к работе, определенное количество сотрудников и требования к их квалификации)
-
-7) Укажи есть ли требования к опыту кампании, нужно ли его подтвердить. Как? Например: наличие договор на оказание услуг суммой 3 000 000 рублей миниму за последний год.
-7) Укажи сроки проведения работ
-
-8) Укажи условия оплаты
-
-9) Укажи порядок определения победителя
-
-10) Предусмотренные штрафы, санкции, неустойки. Цена? за что?
-
-11) Ниже выпиши ключевые вопросы которые необходимо уточнить у Заказчика
+(полный текст вашего промпта)
 """
 
-# ========== 2. ФУНКЦИИ БИТРИКС24 (без изменений) ==========
+# ========== 2. ФУНКЦИИ БИТРИКС24 ==========
 def call_bitrix24(method, params):
     url = f"{BITRIX24_WEBHOOK}{method}"
     try:
@@ -149,16 +117,17 @@ def create_contact(name, phone, email, company_id):
         })
     return contact_id
 
-def create_deal(company_id, deal_name, purchase_link):
-    deal_res = call_bitrix24("crm.deal.add", {
-        "fields": {
-            "TITLE": deal_name,
-            "COMPANY_ID": company_id,
-            "CATEGORY_ID": DEAL_CATEGORY_ID,
-            "STAGE_ID": DEAL_STAGE_ID,
-            FIELD_LINK_CODE: purchase_link
-        }
-    })
+def create_deal(company_id, deal_name, purchase_link, drive_folder_link):
+    # Создаём сделку со всеми полями
+    deal_fields = {
+        "TITLE": deal_name,
+        "COMPANY_ID": company_id,
+        "CATEGORY_ID": DEAL_CATEGORY_ID,
+        "STAGE_ID": DEAL_STAGE_ID,
+        FIELD_LINK_CODE: purchase_link,
+        FIELD_DRIVE_FOLDER_LINK: drive_folder_link
+    }
+    deal_res = call_bitrix24("crm.deal.add", {"fields": deal_fields})
     return deal_res.get("result")
 
 def markdown_table_to_bbcode(table_lines):
@@ -302,7 +271,7 @@ def analyze_with_deepseek(file_paths):
 
     user_prompt = f"{PROMPT}\n\nТекст документов:\n{full_text}"
     headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Authorization": f"Bearer {KODIK_API_KEY}",
         "Content-Type": "application/json"
     }
     payload = {
@@ -317,7 +286,6 @@ def analyze_with_deepseek(file_paths):
         print(f"Статус ответа KodikRouter: {response.status_code}")
         response.raise_for_status()
         data = response.json()
-        print(f"Ключи ответа: {list(data.keys()) if isinstance(data, dict) else 'не словарь'}")
         content = None
         if isinstance(data, dict):
             if "choices" in data and len(data["choices"]) > 0:
@@ -330,7 +298,6 @@ def analyze_with_deepseek(file_paths):
                 content = data["response"]
         elif isinstance(data, str):
             content = data
-        
         if content and isinstance(content, str):
             return content
         else:
@@ -342,10 +309,10 @@ def analyze_with_deepseek(file_paths):
         if hasattr(e, 'response') and e.response is not None:
             print(f"Тело ошибки: {e.response.text[:500]}")
         return f"Ошибка при обращении к KodikRouter: {str(e)}"
-        raise
 
 # ========== 5. ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ==========
 def process_purchase(data):
+    # 1. Поиск/создание компании
     company_id = find_company_by_inn(data["inn"])
     if not company_id:
         company_id = create_company(data["company_name"], data["inn"])
@@ -353,16 +320,24 @@ def process_purchase(data):
     else:
         print(f"Компания уже существует, ID {company_id}")
 
+    # 2. Контакт
     create_contact(data.get("contact_name"), data.get("phone"), data.get("email"), company_id)
-    deal_id = create_deal(company_id, data["company_name"], data.get("purchase_link", ""))
-    print(f"Создана сделка ID {deal_id}")
 
+    # 3. Поиск папки в Google Drive по номеру закупки
     purchase_number = data["purchase_number"]
     print(f"Поиск папки для закупки {purchase_number}...")
     subfolder_id = find_subfolder_id_by_api(GOOGLE_DRIVE_ROOT_FOLDER_ID, purchase_number)
     if not subfolder_id:
         return {"status": "error", "message": f"Не найдена подпапка с именем {purchase_number}"}
 
+    # Формируем ссылку на папку в Google Drive
+    drive_folder_link = f"https://drive.google.com/drive/folders/{subfolder_id}"
+
+    # 4. Создаём сделку (сразу с ссылкой на папку)
+    deal_id = create_deal(company_id, data["company_name"], data.get("purchase_link", ""), drive_folder_link)
+    print(f"Создана сделка ID {deal_id}")
+
+    # 5. Скачиваем файлы из папки для анализа
     temp_dir = tempfile.mkdtemp()
     try:
         downloaded_files = download_folder_by_id(subfolder_id, temp_dir)
@@ -372,23 +347,26 @@ def process_purchase(data):
         for f in downloaded_files:
             print(f"  - {os.path.basename(f)}")
 
+        # 6. Анализ через KodikRouter
         print("Отправка файлов в DeepSeek...")
         analysis = analyze_with_deepseek(downloaded_files)
-        print(f"Analysis type: {type(analysis)}, length: {len(analysis) if analysis else 0}")
-        
-        # Принудительно делаем строкой
         if not isinstance(analysis, str):
             analysis = str(analysis)
         if not analysis:
             analysis = "Анализ не получен"
-        
+
+        # 7. Добавляем комментарий в сделку
         comment_text = f"🤖 Анализ от DeepSeek (модель {DEEPSEEK_MODEL}):\n\n{analysis}"
         add_comment_to_deal(deal_id, comment_text)
         print("Комментарий добавлен в сделку")
 
-        # Безопасное получение preview
-        analysis_preview = (analysis[:300] if analysis and len(analysis) > 300 else analysis)
-        return {"status": "success", "deal_id": deal_id, "analysis_preview": analysis_preview}
+        # 8. Возвращаем ответ для Google Sheets
+        analysis_preview = analysis[:300] if analysis and len(analysis) > 300 else (analysis or "Нет текста")
+        return {
+            "status": "success",
+            "deal_id": deal_id,
+            "analysis_preview": analysis_preview
+        }
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -404,6 +382,7 @@ def process_webhook():
             if field not in data:
                 return jsonify({"status": "error", "message": f"Отсутствует поле '{field}'"}), 400
         result = process_purchase(data)
+        print(f"Ответ сервера: {json.dumps(result, ensure_ascii=False)[:500]}")
         return jsonify(result)
     except Exception as e:
         print(f"Ошибка в процессе обработки: {e}")
