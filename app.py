@@ -3,27 +3,30 @@ import re
 import tempfile
 import shutil
 import requests
-from urllib.parse import quote
+import json
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 import gdown
-from deepseek import DeepSeekClient
+import PyPDF2
+import docx
+import openpyxl
 
 load_dotenv()
 
 api = Flask(__name__)
 
-# ========== 1. НАСТРОЙКИ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ==========
+# ---------- 1. НАСТРОЙКИ ----------
 BITRIX24_WEBHOOK = os.getenv("BITRIX24_WEBHOOK")
-DEEPSEEK_TOKEN = os.getenv("DEEPSEEK_TOKEN")          # Ваш userToken из браузера
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_TOKEN")    # это API-ключ вида sk-...
 DEAL_CATEGORY_ID = int(os.getenv("DEAL_CATEGORY_ID", 42))
 DEAL_STAGE_ID = os.getenv("DEAL_STAGE_ID", "8704")
 FIELD_LINK_CODE = os.getenv("FIELD_LINK_CODE", "UF_CRM_1774428455758")
 FIELD_COMPANY_DIRECTION = os.getenv("FIELD_COMPANY_DIRECTION", "UF_CRM_1774954195201")
 GOOGLE_DRIVE_ROOT_FOLDER_ID = os.getenv("GOOGLE_DRIVE_ROOT_FOLDER_ID")
-DRIVE_API_KEY = os.getenv("DRIVE_API_KEY")            # API-ключ Google (для поиска папки)
+DRIVE_API_KEY = os.getenv("DRIVE_API_KEY")
 
-# ========== 2. ПРОМПТ ДЛЯ DEEPSEEK (вставьте свой полный текст) ==========
+DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
+
 PROMPT = """
 Во вложении техническая документация по закупке.
 Проанализируй документы и предоставь подробную информацию в отчет удобный для копирования в документ WORD:
@@ -32,28 +35,39 @@ PROMPT = """
 3) Название закупки и обоснование для проведения работ, если такая информация есть;
 3.1 Есть ли общий выделенный бюджет на закупку? в смете или в НМЦ (Если в НМЦ возьми самую минимальную цену предложенную в КП)
 4) Перечисли указанные в документации: 
-4.1 Перечень оборудования (Например: котел/теплообменник/калорифер/реактор и т.д.), его наименование, его модель (Например: Visman vitomasx 200-WS или Alfa Laval	A15BW), количество оборудования, вид работ с этим оборудованием (Например: химическая промывка/механическая промывка/разборная промывка/Без разборная промывка),
-Важно! Всегда сначала проверь есть ли во вложенной документации необходимая информация, в случае если информация присутствует, напиши ее, если информации нет, то проверить ее наличие в открытом доступе интернет, если найти ее удалось со 100% точностью, то напиши результат с пометкой "из открытых источников", если найти в открытых источниках не удалось, то напиши "уточнить у Заказчика".
+4.1) Перечень оборудования (Например: котел/теплообменник/калорифер/реактор и т.д.), его наименование, его модель (Например: Visman vitomasx 200-WS или Alfa Laval A15BW), количество оборудования, вид работ с этим оборудованием (Например: химическая промывка/механическая промывка/разборная промывка/Без разборная промывка),
+
+Важно! Всегда сначала проверь есть ли во вложенной документации необходимая информация, в случае если информация присутствует, напиши ее, если информации нет, то проверить ее наличие в открытом доступе интернет, если найти ее удалось со 100% точностью, то напиши результат с пометкой \"из открытых источников\", если найти в открытых источниках не удалось, то напиши \"уточнить у Заказчика\".
+
 Важно! Если работы предусматривают промывку котла/реактора/емкости или др. сосудов: необходимо указать объем водяной рубашки для этого оборудования.
+
 Важно! Если работы предусматривают промывку теплообменников, то прежде всего необходимо определить и указать его тип: пластинчатый, паянный кожухотрубный т.д., 
 Далее необходимо определить и указать вид промывки: для пластинчатых теплообменников это может быть разборная, без разборная, механическая промывка и другая указанная в документации. Для Паянных аппаратов, только без разборная, химическая если в Документации не указано иное. Для кожухотрубных может быть механическая, без разборная промывка. 
 Если промывка Разборная, то обязательно указать количество пластин в каждом теплообменнике их размеры пластин (высота и ширина), размер Ду(DN). Если работы предусматривают промывку теплообменников пластинчатых или паянных безразборно, то обязательно указать размер ДУ(Dn) присоединений и размеры пластин(высота и ширина). Если работы предусматривают промывку теплообменника кожухотрубного, то необходимо выяснить и указать объем этого теплообменника, количество трубок и их диаметр Ду(DN).
-Важно!! Если в документах Заказчика нет информации о размерах, объемах оборудования, то всегда сверься с приложенным файлом "Реестр оборудования и его размеров.xlsx" приложенным к запросу, информация из документов (ТЗ, паспорта) является приоритетной, обязательно напиши в таблице если взял данные из нашего реестра.
+
+Важно!! Если в документах Заказчика нет информации о размерах, объемах оборудования, то всегда сверься с приложенным файлом \"Реестр оборудования и его размеров.xlsx\" приложенным к запросу, информация из документов (ТЗ, паспорта) является приоритетной, обязательно напиши в таблице если взял данные из нашего реестра.
 Результат по пункту 4.1 выведи в формате таблицы.
+
 4.2 Укажи Перечень дополнительных требований к выполнению работ(Например: ультразвук, гидроипульсы, баражирование и т.д).
 4.3 Укажи требования к результатам работ и способ которым это будет фиксироваться;
 5) Укажи есть ли требования к подбору моющего средства (Например: требуется ли определенное средство, биоорганическое, кислотное, либо наоборот без содержания соляной кислоты и т.д.)
 Обязательно укажи требования по утилизации объема отработанного раствора/моющего средства.
+
 6) Укажи есть ли требования к персоналу? (Например: наличие определенных допусков к работе, определенное количество сотрудников и требования к их квалификации)
+
 7) Укажи есть ли требования к опыту кампании, нужно ли его подтвердить. Как? Например: наличие договор на оказание услуг суммой 3 000 000 рублей миниму за последний год.
-8) Укажи сроки проведения работ
-9) Укажи условия оплаты
-10) Укажи порядок определения победителя
-11) Предусмотренные штрафы, санкции, неустойки. Цена? за что?
-12) Ниже выпиши ключевые вопросы которые необходимо уточнить у Заказчика
+7) Укажи сроки проведения работ
+
+8) Укажи условия оплаты
+
+9) Укажи порядок определения победителя
+
+10) Предусмотренные штрафы, санкции, неустойки. Цена? за что?
+
+11) Ниже выпиши ключевые вопросы которые необходимо уточнить у Заказчика
 """
 
-# ========== 3. ФУНКЦИИ ДЛЯ БИТРИКС24 ==========
+# ---------- 2. ФУНКЦИИ ДЛЯ РАБОТЫ С БИТРИКС24 ----------
 def call_bitrix24(method, params):
     url = f"{BITRIX24_WEBHOOK}{method}"
     try:
@@ -200,9 +214,8 @@ def add_comment_to_deal(deal_id, comment_text):
     params = {"fields": {"ENTITY_ID": deal_id, "ENTITY_TYPE": "deal", "COMMENT": formatted_comment}}
     return call_bitrix24("crm.timeline.comment.add", params)
 
-# ========== 4. ФУНКЦИИ ДЛЯ GOOGLE DRIVE ==========
+# ---------- 3. ФУНКЦИИ ДЛЯ РАБОТЫ С GOOGLE DRIVE ----------
 def find_subfolder_id_by_api(parent_folder_id, target_name):
-    """Находит ID подпапки через Google Drive API v3 (с API-ключом)."""
     if not DRIVE_API_KEY:
         print("Ошибка: не задан DRIVE_API_KEY")
         return None
@@ -230,7 +243,6 @@ def find_subfolder_id_by_api(parent_folder_id, target_name):
         return None
 
 def download_folder_by_id(folder_id, destination_dir):
-    """Скачивает всю публичную папку через gdown."""
     try:
         gdown.download_folder(id=folder_id, output=destination_dir, use_cookies=False, quiet=False)
         downloaded_files = []
@@ -243,15 +255,75 @@ def download_folder_by_id(folder_id, destination_dir):
         print(f"Ошибка скачивания папки {folder_id}: {e}")
         return []
 
-# ========== 5. ФУНКЦИЯ ДЛЯ DEEPSEEK (БЕСПЛАТНАЯ, ЧЕРЕЗ p2d-deepseek) ==========
-def analyze_with_deepseek(file_paths):
-    """Отправляет файлы в DeepSeek через библиотеку p2d-deepseek (бесплатно)."""
-    client = DeepSeekClient(api_key=DEEPSEEK_TOKEN)
-    # Библиотека сама загрузит файлы, отправит промпт и вернёт ответ
-    response = client.chat(PROMPT, files=file_paths)
-    return response.response
+def extract_text_from_file(file_path):
+    ext = os.path.splitext(file_path)[1].lower()
+    try:
+        if ext == '.pdf':
+            text = ""
+            with open(file_path, 'rb') as f:
+                reader = PyPDF2.PdfReader(f)
+                for page in reader.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text + "\n"
+            return text
+        elif ext == '.docx':
+            doc = docx.Document(file_path)
+            return "\n".join([p.text for p in doc.paragraphs])
+        elif ext == '.txt':
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                return f.read()
+        elif ext in ('.xls', '.xlsx'):
+            wb = openpyxl.load_workbook(file_path, data_only=True)
+            text = ""
+            for sheet in wb.worksheets:
+                for row in sheet.iter_rows(values_only=True):
+                    text += " ".join(str(cell) for cell in row if cell) + "\n"
+            return text
+        else:
+            return ""
+    except Exception as e:
+        print(f"Ошибка извлечения текста из {file_path}: {e}")
+        return ""
 
-# ========== 6. ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ==========
+# ---------- 4. ФУНКЦИЯ ДЛЯ РАБОТЫ С DEEPSEEK API ----------
+def analyze_with_deepseek(file_paths):
+    full_text = ""
+    for path in file_paths:
+        text = extract_text_from_file(path)
+        if text:
+            full_text += f"\n\n--- Файл: {os.path.basename(path)} ---\n{text}\n"
+    if not full_text.strip():
+        raise Exception("Не удалось извлечь текст из файлов")
+    if len(full_text) > 300000:
+        full_text = full_text[:300000] + "...\n[Текст документа обрезан из-за ограничения длины]"
+    
+    user_prompt = f"{PROMPT}\n\nТекст документов:\n{full_text}"
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": user_prompt}],
+        "temperature": 0.3,
+        "max_tokens": 4000
+    }
+    try:
+        response = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=120)
+        response.raise_for_status()
+        result = response.json()
+        if "choices" in result and len(result["choices"]) > 0:
+            return result["choices"][0]["message"]["content"]
+        else:
+            raise Exception("Неожиданный формат ответа от DeepSeek API")
+    except Exception as e:
+        print(f"Ошибка при запросе к DeepSeek API: {e}")
+        if 'response' in locals():
+            print(f"Статус: {response.status_code}, тело: {response.text[:500]}")
+        raise
+
+# ---------- 5. ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ----------
 def process_purchase(data):
     # 1. Поиск/создание компании
     company_id = find_company_by_inn(data["inn"])
@@ -261,42 +333,42 @@ def process_purchase(data):
     else:
         print(f"Компания уже существует, ID {company_id}")
 
-    # 2. Контакт и сделка
+    # 2. Создание контакта и сделки
     create_contact(data.get("contact_name"), data.get("phone"), data.get("email"), company_id)
     deal_id = create_deal(company_id, data["company_name"], data.get("purchase_link", ""))
     print(f"Создана сделка ID {deal_id}")
 
-    # 3. Поиск папки в Google Drive по номеру закупки
+    # 3. Поиск папки в Google Drive
     purchase_number = data["purchase_number"]
     print(f"Поиск папки для закупки {purchase_number}...")
     subfolder_id = find_subfolder_id_by_api(GOOGLE_DRIVE_ROOT_FOLDER_ID, purchase_number)
     if not subfolder_id:
-        return {"status": "error", "message": f"Не найдена подпапка {purchase_number}"}
+        return {"status": "error", "message": f"Не найдена подпапка с именем {purchase_number}"}
 
     # 4. Скачивание файлов
     temp_dir = tempfile.mkdtemp()
     try:
         downloaded_files = download_folder_by_id(subfolder_id, temp_dir)
         if not downloaded_files:
-            return {"status": "error", "message": "Не удалось скачать файлы"}
+            return {"status": "error", "message": "Не удалось скачать файлы из папки"}
         print(f"Скачано файлов: {len(downloaded_files)}")
         for f in downloaded_files:
             print(f"  - {os.path.basename(f)}")
 
         # 5. Анализ через DeepSeek
-        print("Отправка в DeepSeek...")
+        print("Отправка файлов в DeepSeek...")
         analysis = analyze_with_deepseek(downloaded_files)
 
-        # 6. Сохранение результата в сделку (комментарий)
+        # 6. Добавление комментария в сделку
         comment_text = f"🤖 Анализ от DeepSeek:\n\n{analysis}"
         add_comment_to_deal(deal_id, comment_text)
-        print("Комментарий добавлен")
+        print("Комментарий добавлен в сделку")
 
         return {"status": "success", "deal_id": deal_id, "analysis_preview": analysis[:300]}
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-# ========== 7. FLASK-ЭНДПОИНТ ДЛЯ GOOGLE SHEETS ==========
+# ---------- 6. FLASK ENDPOINT ----------
 @api.route('/process', methods=['POST'])
 def process_webhook():
     try:
@@ -310,10 +382,10 @@ def process_webhook():
         result = process_purchase(data)
         return jsonify(result)
     except Exception as e:
-        print(f"Ошибка: {e}")
+        print(f"Ошибка в процессе обработки: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# ========== 8. ЗАПУСК СЕРВЕРА ==========
+# ---------- 7. ЗАПУСК ----------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     api.run(host='0.0.0.0', port=port)
