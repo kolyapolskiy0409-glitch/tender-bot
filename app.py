@@ -12,7 +12,7 @@ api = Flask(__name__)
 
 # ========== 1. НАСТРОЙКИ ==========
 BITRIX24_WEBHOOK = os.getenv("BITRIX24_WEBHOOK")
-DEEPSEEK_API_KEY = os.getenv("KODIK_API_KEY")   # Ваш ключ от KodikRouter
+DEEPSEEK_API_KEY = os.getenv("KODIK_API_KEY")          # Ключ от KodikRouter
 DEAL_CATEGORY_ID = int(os.getenv("DEAL_CATEGORY_ID", 42))
 DEAL_STAGE_ID = os.getenv("DEAL_STAGE_ID", "8704")
 FIELD_LINK_CODE = os.getenv("FIELD_LINK_CODE", "UF_CRM_1774428455758")
@@ -20,10 +20,11 @@ FIELD_COMPANY_DIRECTION = os.getenv("FIELD_COMPANY_DIRECTION", "UF_CRM_177495419
 GOOGLE_DRIVE_ROOT_FOLDER_ID = os.getenv("GOOGLE_DRIVE_ROOT_FOLDER_ID")
 DRIVE_API_KEY = os.getenv("DRIVE_API_KEY")
 
-# Настройки KodikRouter
+# KodikRouter настройки
 DEEPSEEK_URL = "https://api.kodikrouter.ru/v1/chat/completions"
-DEEPSEEK_MODEL = "deepseek/deepseek-v4-pro"  # <-- Указываем модель, как в документации KodikRouter
+DEEPSEEK_MODEL = "deepseek/deepseek-v4-pro"
 
+# Ваш промпт (полный текст, вставьте его целиком)
 PROMPT = """
 Во вложении техническая документация по закупке.
 Проанализируй документы и предоставь подробную информацию в отчет удобный для копирования в документ WORD:
@@ -32,9 +33,9 @@ PROMPT = """
 3) Название закупки и обоснование для проведения работ, если такая информация есть;
 3.1 Есть ли общий выделенный бюджет на закупку? в смете или в НМЦ (Если в НМЦ возьми самую минимальную цену предложенную в КП)
 4) Перечисли указанные в документации: 
-4.1) Перечень оборудования (Например: котел/теплообменник/калорифер/реактор и т.д.), его наименование, его модель (Например: Visman vitomasx 200-WS или Alfa Laval A15BW), количество оборудования, вид работ с этим оборудованием (Например: химическая промывка/механическая промывка/разборная промывка/Без разборная промывка),
+4.1) Перечень оборудования (Например: котел/теплообменник/калорифер/реактор и т.д.), его наименование, его модель (Например: Visman vitomasx 200-WS или Alfa Laval	A15BW), количество оборудования, вид работ с этим оборудованием (Например: химическая промывка/механическая промывка/разборная промывка/Без разборная промывка),
 
-Важно! Всегда сначала проверь есть ли во вложенной документации необходимая информация, в случае если информация присутствует, напиши ее, если информации нет, то проверить ее наличие в открытом доступе интернет, если найти ее удалось со 100% точностью, то напиши результат с пометкой \"из открытых источников\", если найти в открытых источниках не удалось, то напиши \"уточнить у Заказчика\".
+Важно! Всегда сначала проверь есть ли во вложенной документации необходимая информация, в случае если информация присутствует, напиши ее, если информации нет, то проверить ее наличие в открытом доступе интернет, если найти ее удалось со 100% точностью, то напиши результат с пометкой "из открытых источников", если найти в открытых источниках не удалось, то напиши "уточнить у Заказчика".
 
 Важно! Если работы предусматривают промывку котла/реактора/емкости или др. сосудов: необходимо указать объем водяной рубашки для этого оборудования.
 
@@ -42,7 +43,7 @@ PROMPT = """
 Далее необходимо определить и указать вид промывки: для пластинчатых теплообменников это может быть разборная, без разборная, механическая промывка и другая указанная в документации. Для Паянных аппаратов, только без разборная, химическая если в Документации не указано иное. Для кожухотрубных может быть механическая, без разборная промывка. 
 Если промывка Разборная, то обязательно указать количество пластин в каждом теплообменнике их размеры пластин (высота и ширина), размер Ду(DN). Если работы предусматривают промывку теплообменников пластинчатых или паянных безразборно, то обязательно указать размер ДУ(Dn) присоединений и размеры пластин(высота и ширина). Если работы предусматривают промывку теплообменника кожухотрубного, то необходимо выяснить и указать объем этого теплообменника, количество трубок и их диаметр Ду(DN).
 
-Важно!! Если в документах Заказчика нет информации о размерах, объемах оборудования, то всегда сверься с приложенным файлом \"Реестр оборудования и его размеров.xlsx\" приложенным к запросу, информация из документов (ТЗ, паспорта) является приоритетной, обязательно напиши в таблице если взял данные из нашего реестра.
+Важно!! Если в документах Заказчика нет информации о размерах, объемах оборудования, то всегда сверься с приложенным файлом "Реестр оборудования и его размеров.xlsx" приложенным к запросу, информация из документов (ТЗ, паспорта) является приоритетной, обязательно напиши в таблице если взял данные из нашего реестра.
 Результат по пункту 4.1 выведи в формате таблицы.
 
 4.2 Укажи Перечень дополнительных требований к выполнению работ(Например: ультразвук, гидроипульсы, баражирование и т.д).
@@ -64,7 +65,7 @@ PROMPT = """
 11) Ниже выпиши ключевые вопросы которые необходимо уточнить у Заказчика
 """
 
-# ========== 2. ФУНКЦИИ БИТРИКС24 (без изменений) ==========
+# ========== 2. ФУНКЦИИ БИТРИКС24 ==========
 def call_bitrix24(method, params):
     url = f"{BITRIX24_WEBHOOK}{method}"
     try:
@@ -211,7 +212,7 @@ def add_comment_to_deal(deal_id, comment_text):
     params = {"fields": {"ENTITY_ID": deal_id, "ENTITY_TYPE": "deal", "COMMENT": formatted_comment}}
     return call_bitrix24("crm.timeline.comment.add", params)
 
-# ========== 3. ФУНКЦИИ GOOGLE DRIVE ==========
+# ========== 3. ФУНКЦИИ ДЛЯ GOOGLE DRIVE ==========
 def find_subfolder_id_by_api(parent_folder_id, target_name):
     if not DRIVE_API_KEY:
         print("Ошибка: не задан DRIVE_API_KEY")
@@ -286,7 +287,7 @@ def extract_text_from_file(file_path):
         print(f"Ошибка извлечения текста из {file_path}: {e}")
         return ""
 
-# ========== 4. ФУНКЦИЯ ДЛЯ DEEPSEEK (через KodikRouter) ==========
+# ========== 4. ФУНКЦИЯ ДЛЯ DEEPSEEK (KodikRouter) ==========
 def analyze_with_deepseek(file_paths):
     full_text = ""
     for path in file_paths:
@@ -295,7 +296,7 @@ def analyze_with_deepseek(file_paths):
             full_text += f"\n\n--- Файл: {os.path.basename(path)} ---\n{text}\n"
     if not full_text.strip():
         raise Exception("Не удалось извлечь текст из файлов")
-    if len(full_text) > 800000:  # Оставляем запас под ответ модели
+    if len(full_text) > 800000:
         full_text = full_text[:800000] + "...\n[Текст документа обрезан из-за ограничения длины]"
 
     user_prompt = f"{PROMPT}\n\nТекст документов:\n{full_text}"
@@ -311,17 +312,22 @@ def analyze_with_deepseek(file_paths):
     }
     try:
         print(f"Отправка запроса к KodikRouter, модель: {DEEPSEEK_MODEL}")
-        response = requests.post(DEEPSEEK_URL, headers=headers, json=payload, timeout=120)
+        # Увеличенный таймаут – 180 секунд
+        response = requests.post(DEEPSEEK_URL, headers=headers, json=payload, timeout=180)
+        print(f"Статус ответа KodikRouter: {response.status_code}")
         response.raise_for_status()
         result = response.json()
         if "choices" in result and len(result["choices"]) > 0:
             return result["choices"][0]["message"]["content"]
         else:
             raise Exception("Неожиданный формат ответа от KodikRouter")
+    except requests.exceptions.Timeout:
+        print("Таймаут запроса к KodikRouter (180 сек)")
+        raise Exception("Таймаут при обращении к KodikRouter")
     except Exception as e:
         print(f"Ошибка DeepSeek: {e}")
         if hasattr(e, 'response') and e.response is not None:
-            print(f"Статус: {e.response.status_code}, тело: {e.response.text}")
+            print(f"Статус: {e.response.status_code}, тело: {e.response.text[:500]}")
         raise
 
 # ========== 5. ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ==========
@@ -334,17 +340,17 @@ def process_purchase(data):
     else:
         print(f"Компания уже существует, ID {company_id}")
 
-    # 2. Создание контакта и сделки
+    # 2. Контакт и сделка
     create_contact(data.get("contact_name"), data.get("phone"), data.get("email"), company_id)
     deal_id = create_deal(company_id, data["company_name"], data.get("purchase_link", ""))
     print(f"Создана сделка ID {deal_id}")
 
-    # 3. Поиск папки на Google Drive
+    # 3. Поиск папки в Google Drive
     purchase_number = data["purchase_number"]
     print(f"Поиск папки для закупки {purchase_number}...")
     subfolder_id = find_subfolder_id_by_api(GOOGLE_DRIVE_ROOT_FOLDER_ID, purchase_number)
     if not subfolder_id:
-        return {"status": "error", "message": f"Не найдена подпапка с именем {purchase_number} в корневой папке Google Drive"}
+        return {"status": "error", "message": f"Не найдена подпапка с именем {purchase_number}"}
 
     # 4. Скачивание файлов
     temp_dir = tempfile.mkdtemp()
@@ -356,11 +362,11 @@ def process_purchase(data):
         for f in downloaded_files:
             print(f"  - {os.path.basename(f)}")
 
-        # 5. Анализ через KodikRouter
+        # 5. Анализ через DeepSeek
         print("Отправка файлов в DeepSeek...")
         analysis = analyze_with_deepseek(downloaded_files)
 
-        # 6. Добавление комментария в сделку
+        # 6. Комментарий в сделку
         comment_text = f"🤖 Анализ от DeepSeek (модель {DEEPSEEK_MODEL}):\n\n{analysis}"
         add_comment_to_deal(deal_id, comment_text)
         print("Комментарий добавлен в сделку")
@@ -369,7 +375,7 @@ def process_purchase(data):
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-# ========== 6. FLASK ЭНДПОИНТ ДЛЯ GOOGLE SHEETS ==========
+# ========== 6. FLASK-ЭНДПОИНТ ==========
 @api.route('/process', methods=['POST'])
 def process_webhook():
     try:
@@ -379,14 +385,14 @@ def process_webhook():
         required = ["inn", "company_name", "purchase_number"]
         for field in required:
             if field not in data:
-                return jsonify({"status": "error", "message": f"В запросе отсутствует поле '{field}'"}), 400
+                return jsonify({"status": "error", "message": f"Отсутствует поле '{field}'"}), 400
         result = process_purchase(data)
         return jsonify(result)
     except Exception as e:
         print(f"Ошибка в процессе обработки: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# ========== 7. ЗАПУСК СЕРВЕРА ==========
+# ========== 7. ЗАПУСК ==========
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     api.run(host='0.0.0.0', port=port)
