@@ -7,7 +7,3 @@ PyPDF2
 python-docx
 openpyxl
 beautifulsoup4
-easyocr
-opencv-python-headless
-pillow
-numpy
