@@ -24,7 +24,7 @@ DRIVE_API_KEY = os.getenv("DRIVE_API_KEY")
 DEEPSEEK_URL = "https://api.kodikrouter.ru/v1/chat/completions"
 
 # Используем мощную модель для анализа тендеров
-DEEPSEEK_MODEL = "deepseek-v4-pro"
+DEEPSEEK_MODEL = "deepseek/deepseek-v4-pro"
 
 # Ваш промпт (полный текст, который вы использовали ранее)
 PROMPT = """
