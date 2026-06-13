@@ -3,21 +3,16 @@ import re
 import tempfile
 import shutil
 import requests
-import json
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 import gdown
-import PyPDF2
-import docx
-import openpyxl
 
 load_dotenv()
-
 api = Flask(__name__)
 
-# ---------- 1. НАСТРОЙКИ ----------
+# ==================== 1. НАСТРОЙКИ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ====================
 BITRIX24_WEBHOOK = os.getenv("BITRIX24_WEBHOOK")
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_TOKEN")    # это API-ключ вида sk-...
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_TOKEN")          # Новый ключ от KodikRouter
 DEAL_CATEGORY_ID = int(os.getenv("DEAL_CATEGORY_ID", 42))
 DEAL_STAGE_ID = os.getenv("DEAL_STAGE_ID", "8704")
 FIELD_LINK_CODE = os.getenv("FIELD_LINK_CODE", "UF_CRM_1774428455758")
@@ -25,8 +20,13 @@ FIELD_COMPANY_DIRECTION = os.getenv("FIELD_COMPANY_DIRECTION", "UF_CRM_177495419
 GOOGLE_DRIVE_ROOT_FOLDER_ID = os.getenv("GOOGLE_DRIVE_ROOT_FOLDER_ID")
 DRIVE_API_KEY = os.getenv("DRIVE_API_KEY")
 
-DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
+# URL для KodikRouter (российский шлюз)
+DEEPSEEK_URL = "https://api.kodikrouter.ru/v1/chat/completions"
 
+# Используем мощную модель для анализа тендеров
+DEEPSEEK_MODEL = "deepseek-v4-pro"
+
+# Ваш промпт (полный текст, который вы использовали ранее)
 PROMPT = """
 Во вложении техническая документация по закупке.
 Проанализируй документы и предоставь подробную информацию в отчет удобный для копирования в документ WORD:
@@ -67,7 +67,7 @@ PROMPT = """
 11) Ниже выпиши ключевые вопросы которые необходимо уточнить у Заказчика
 """
 
-# ---------- 2. ФУНКЦИИ ДЛЯ РАБОТЫ С БИТРИКС24 ----------
+# ==================== 2. ФУНКЦИИ ДЛЯ БИТРИКС24 ====================
 def call_bitrix24(method, params):
     url = f"{BITRIX24_WEBHOOK}{method}"
     try:
@@ -214,7 +214,7 @@ def add_comment_to_deal(deal_id, comment_text):
     params = {"fields": {"ENTITY_ID": deal_id, "ENTITY_TYPE": "deal", "COMMENT": formatted_comment}}
     return call_bitrix24("crm.timeline.comment.add", params)
 
-# ---------- 3. ФУНКЦИИ ДЛЯ РАБОТЫ С GOOGLE DRIVE ----------
+# ==================== 3. ФУНКЦИИ ДЛЯ GOOGLE DRIVE ====================
 def find_subfolder_id_by_api(parent_folder_id, target_name):
     if not DRIVE_API_KEY:
         print("Ошибка: не задан DRIVE_API_KEY")
@@ -259,6 +259,7 @@ def extract_text_from_file(file_path):
     ext = os.path.splitext(file_path)[1].lower()
     try:
         if ext == '.pdf':
+            import PyPDF2
             text = ""
             with open(file_path, 'rb') as f:
                 reader = PyPDF2.PdfReader(f)
@@ -268,12 +269,14 @@ def extract_text_from_file(file_path):
                         text += page_text + "\n"
             return text
         elif ext == '.docx':
+            import docx
             doc = docx.Document(file_path)
             return "\n".join([p.text for p in doc.paragraphs])
         elif ext == '.txt':
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 return f.read()
         elif ext in ('.xls', '.xlsx'):
+            import openpyxl
             wb = openpyxl.load_workbook(file_path, data_only=True)
             text = ""
             for sheet in wb.worksheets:
@@ -286,7 +289,7 @@ def extract_text_from_file(file_path):
         print(f"Ошибка извлечения текста из {file_path}: {e}")
         return ""
 
-# ---------- 4. ФУНКЦИЯ ДЛЯ РАБОТЫ С DEEPSEEK API ----------
+# ==================== 4. ФУНКЦИЯ ДЛЯ DEEPSEEK (через KodikRouter) ====================
 def analyze_with_deepseek(file_paths):
     full_text = ""
     for path in file_paths:
@@ -297,33 +300,34 @@ def analyze_with_deepseek(file_paths):
         raise Exception("Не удалось извлечь текст из файлов")
     if len(full_text) > 300000:
         full_text = full_text[:300000] + "...\n[Текст документа обрезан из-за ограничения длины]"
-    
+
     user_prompt = f"{PROMPT}\n\nТекст документов:\n{full_text}"
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "deepseek-chat",
+        "model": DEEPSEEK_MODEL,
         "messages": [{"role": "user", "content": user_prompt}],
         "temperature": 0.3,
         "max_tokens": 4000
     }
     try:
-        response = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=120)
+        print(f"Отправка запроса к KodikRouter, модель: {DEEPSEEK_MODEL}")
+        response = requests.post(DEEPSEEK_URL, headers=headers, json=payload, timeout=120)
         response.raise_for_status()
         result = response.json()
         if "choices" in result and len(result["choices"]) > 0:
             return result["choices"][0]["message"]["content"]
         else:
-            raise Exception("Неожиданный формат ответа от DeepSeek API")
+            raise Exception("Неожиданный формат ответа от DeepSeek API через KodikRouter")
     except Exception as e:
         print(f"Ошибка при запросе к DeepSeek API: {e}")
-        if 'response' in locals():
-            print(f"Статус: {response.status_code}, тело: {response.text[:500]}")
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"Статус: {e.response.status_code}, тело: {e.response.text}")
         raise
 
-# ---------- 5. ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ----------
+# ==================== 5. ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ====================
 def process_purchase(data):
     # 1. Поиск/создание компании
     company_id = find_company_by_inn(data["inn"])
@@ -338,29 +342,29 @@ def process_purchase(data):
     deal_id = create_deal(company_id, data["company_name"], data.get("purchase_link", ""))
     print(f"Создана сделка ID {deal_id}")
 
-    # 3. Поиск папки в Google Drive
+    # 3. Поиск папки в Google Drive по номеру закупки
     purchase_number = data["purchase_number"]
     print(f"Поиск папки для закупки {purchase_number}...")
     subfolder_id = find_subfolder_id_by_api(GOOGLE_DRIVE_ROOT_FOLDER_ID, purchase_number)
     if not subfolder_id:
-        return {"status": "error", "message": f"Не найдена подпапка с именем {purchase_number}"}
+        return {"status": "error", "message": f"Не найдена подпапка с именем {purchase_number} в корневой папке Google Drive"}
 
-    # 4. Скачивание файлов
+    # 4. Скачивание файлов во временную папку
     temp_dir = tempfile.mkdtemp()
     try:
         downloaded_files = download_folder_by_id(subfolder_id, temp_dir)
         if not downloaded_files:
-            return {"status": "error", "message": "Не удалось скачать файлы из папки"}
+            return {"status": "error", "message": f"Не удалось скачать файлы из папки {purchase_number}"}
         print(f"Скачано файлов: {len(downloaded_files)}")
         for f in downloaded_files:
             print(f"  - {os.path.basename(f)}")
 
-        # 5. Анализ через DeepSeek
+        # 5. Анализ через DeepSeek (KodikRouter)
         print("Отправка файлов в DeepSeek...")
         analysis = analyze_with_deepseek(downloaded_files)
 
         # 6. Добавление комментария в сделку
-        comment_text = f"🤖 Анализ от DeepSeek:\n\n{analysis}"
+        comment_text = f"🤖 Анализ от DeepSeek (модель {DEEPSEEK_MODEL}):\n\n{analysis}"
         add_comment_to_deal(deal_id, comment_text)
         print("Комментарий добавлен в сделку")
 
@@ -368,7 +372,7 @@ def process_purchase(data):
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-# ---------- 6. FLASK ENDPOINT ----------
+# ==================== 6. FLASK-ЭНДПОИНТ ДЛЯ GOOGLE SHEETS ====================
 @api.route('/process', methods=['POST'])
 def process_webhook():
     try:
@@ -378,14 +382,14 @@ def process_webhook():
         required = ["inn", "company_name", "purchase_number"]
         for field in required:
             if field not in data:
-                return jsonify({"status": "error", "message": f"Отсутствует поле '{field}'"}), 400
+                return jsonify({"status": "error", "message": f"В запросе отсутствует поле '{field}'"}), 400
         result = process_purchase(data)
         return jsonify(result)
     except Exception as e:
         print(f"Ошибка в процессе обработки: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# ---------- 7. ЗАПУСК ----------
+# ==================== 7. ЗАПУСК СЕРВЕРА ====================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     api.run(host='0.0.0.0', port=port)
