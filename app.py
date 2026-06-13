@@ -26,7 +26,7 @@ FIELD_COMPANY_DIRECTION = os.getenv("FIELD_COMPANY_DIRECTION", "UF_CRM_177495419
 GOOGLE_DRIVE_ROOT_FOLDER_ID = os.getenv("GOOGLE_DRIVE_ROOT_FOLDER_ID")
 DRIVE_API_KEY = os.getenv("DRIVE_API_KEY")  # 🗝️ Ключ из Google Cloud Console
 
-DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
+DEEPSEEK_API_URL = "https://chat.deepseek.com/api/v0/chat/completions"
 
 # --- 2. ПРОМПТ (замените на свой полный текст) ---
 PROMPT = """
@@ -282,9 +282,12 @@ def analyze_with_deepseek(file_paths):
     
     user_prompt = f"{PROMPT}\n\nТекст документов:\n{full_text}"
     headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+    "Content-Type": "application/json",
+    "Referer": "https://chat.deepseek.com",
+    "Origin": "https://chat.deepseek.com",
+    "User-Agent": "Mozilla/5.0 (compatible; DeepSeek-Bot/1.0)"
+}
     payload = {
         "model": "deepseek-chat",
         "messages": [{"role": "user", "content": user_prompt}],
