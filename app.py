@@ -2,15 +2,13 @@ import os
 import tempfile
 import shutil
 import requests
-import base64
 from flask import Flask, request, jsonify
 from openai import OpenAI
 from docx import Document
 import pandas as pd
-import fitz  # PyMuPDF для работы с PDF
+import fitz  # PyMuPDF
 import pytesseract
 from PIL import Image
-from io import BytesIO
 
 app = Flask(__name__)
 
@@ -25,14 +23,13 @@ client = OpenAI(
 )
 MODEL_NAME = "deepseek/deepseek-v4-pro"
 
-# === Функции извлечения текста ===
+# ================= ФУНКЦИИ ИЗВЛЕЧЕНИЯ ТЕКСТА =================
 def extract_text_from_docx(file_path: str) -> str:
     doc = Document(file_path)
     paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
     return "\n".join(paragraphs)
 
 def extract_text_from_excel(file_path: str) -> str:
-    """Читает все листы Excel и возвращает текст в виде таблиц"""
     xls = pd.ExcelFile(file_path)
     all_text = []
     for sheet_name in xls.sheet_names:
@@ -42,10 +39,6 @@ def extract_text_from_excel(file_path: str) -> str:
     return "\n\n".join(all_text)
 
 def extract_text_from_pdf(file_path: str) -> str:
-    """
-    Извлекает текст из PDF-файла с помощью PyMuPDF.
-    Возвращает весь текст, объединенный из всех страниц.
-    """
     doc = fitz.open(file_path)
     text = ""
     for page_num in range(len(doc)):
@@ -55,22 +48,16 @@ def extract_text_from_pdf(file_path: str) -> str:
     return text.strip() if text else "[Не удалось извлечь текст из PDF]"
 
 def extract_text_from_image(file_path: str) -> str:
-    """
-    Распознает текст на изображении с помощью pytesseract (OCR).
-    Поддерживает форматы: PNG, JPEG, BMP, TIFF, WebP.
-    """
     try:
         image = Image.open(file_path)
-        # Конвертируем в RGB, если изображение в другом режиме (например, RGBA)
         if image.mode not in ("L", "RGB"):
             image = image.convert("RGB")
-        # Распознаем текст на русском и английском языках
         text = pytesseract.image_to_string(image, lang="rus+eng")
         return text.strip() if text else "[На изображении не найден текст]"
     except Exception as e:
         return f"[Ошибка OCR: {str(e)}]"
 
-# === Скачивание с Google Drive ===
+# ================= СКАЧИВАНИЕ С GOOGLE DRIVE =================
 def download_file_from_google_drive(file_id: str, destination: str) -> None:
     URL = f"https://drive.google.com/uc?export=download&id={file_id}"
     session = requests.Session()
@@ -86,10 +73,10 @@ def download_file_from_google_drive(file_id: str, destination: str) -> None:
             if chunk:
                 f.write(chunk)
 
-# === Анализ документов через DeepSeek ===
+# ================= АНАЛИЗ ДОКУМЕНТОВ =================
 def analyze_documents(files_info: list) -> str:
     """
-    files_info: список словарей [{"path": str, "name": str}, ...]
+    files_info: [{"path": "локальный путь", "name": "имя файла"}, ...]
     """
     all_texts = []
     for fi in files_info:
@@ -112,9 +99,9 @@ def analyze_documents(files_info: list) -> str:
     
     combined_content = "\n\n".join(all_texts)
     
-    # Расширенный промт (полностью по заданию пользователя)
     system_prompt = "Ты – эксперт по анализу тендерной документации."
     
+    # ПОЛНЫЙ ПРОМТ (ваш, без сокращений)
     user_prompt = f"""
 Во вложении техническая документация по закупке.
 Проанализируй документы и предоставь подробную информацию в отчёт, удобный для копирования в документ WORD:
@@ -169,6 +156,7 @@ def analyze_documents(files_info: list) -> str:
 Вот содержимое документов:
 {combined_content}
 """
+    
     try:
         response = client.chat.completions.create(
             model=MODEL_NAME,
@@ -183,7 +171,7 @@ def analyze_documents(files_info: list) -> str:
     except Exception as e:
         raise RuntimeError(f"Ошибка при запросе к KodikRouter: {str(e)}")
 
-# === Flask endpoint ===
+# ================= FLASK ENDPOINT =================
 @app.route('/process', methods=['POST'])
 def process_webhook():
     """
@@ -191,9 +179,7 @@ def process_webhook():
     {
       "files": [
         {"id": "google_drive_file_id_1", "name": "document1.docx"},
-        {"id": "google_drive_file_id_2", "name": "реестр.xlsx"},
-        {"id": "google_drive_file_id_3", "name": "specification.pdf"},
-        {"id": "google_drive_file_id_4", "name": "photo.jpg"}
+        {"id": "google_drive_file_id_2", "name": "реестр.xlsx"}
       ]
     }
     """
@@ -218,17 +204,17 @@ def process_webhook():
         if not downloaded_files:
             return jsonify({"error": "Не удалось скачать ни одного файла"}), 400
         
-        # Анализируем все файлы
         analysis_result = analyze_documents(downloaded_files)
-        
         return jsonify({"analysis": analysis_result}), 200
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
-        # Удаляем временную папку со всем содержимым
         shutil.rmtree(temp_dir, ignore_errors=True)
 
+# ================= ТОЧКА ВХОДА ДЛЯ GUNICORN =================
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
+# Приложение готово – Gunicorn будет использовать переменную `app`
