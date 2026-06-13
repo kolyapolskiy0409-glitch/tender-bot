@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import tempfile
 import shutil
 import requests
@@ -24,7 +25,7 @@ DRIVE_API_KEY = os.getenv("DRIVE_API_KEY")
 DEEPSEEK_URL = "https://api.kodikrouter.ru/v1/chat/completions"
 DEEPSEEK_MODEL = "deepseek/deepseek-v4-pro"
 
-# Ваш промпт (полный текст, вставьте его целиком)
+# Ваш промпт (полный текст, вставьте его)
 PROMPT = """
 Во вложении техническая документация по закупке.
 Проанализируй документы и предоставь подробную информацию в отчет удобный для копирования в документ WORD:
@@ -65,7 +66,7 @@ PROMPT = """
 11) Ниже выпиши ключевые вопросы которые необходимо уточнить у Заказчика
 """
 
-# ========== 2. ФУНКЦИИ БИТРИКС24 ==========
+# ========== 2. ФУНКЦИИ БИТРИКС24 (без изменений) ==========
 def call_bitrix24(method, params):
     url = f"{BITRIX24_WEBHOOK}{method}"
     try:
@@ -313,21 +314,20 @@ def analyze_with_deepseek(file_paths):
     try:
         print("Отправка запроса к KodikRouter...")
         response = requests.post(DEEPSEEK_URL, headers=headers, json=payload, timeout=180)
-        print(f"Статус: {response.status_code}")
+        print(f"Статус ответа KodikRouter: {response.status_code}")
         response.raise_for_status()
         data = response.json()
-        # Сохраним полный ответ в файл для отладки (не обязательно)
-        with open("/tmp/kodik_response.json", "w") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        # Пытаемся извлечь content
+        # Выводим ключи ответа для диагностики
+        print(f"Ключи ответа: {list(data.keys()) if isinstance(data, dict) else 'не словарь'}")
+        # Извлекаем content
         content = None
         if isinstance(data, dict):
-            # Стандартный OpenAI
+            # Стандартный формат OpenAI
             if "choices" in data and len(data["choices"]) > 0:
                 msg = data["choices"][0].get("message")
                 if msg and isinstance(msg, dict):
                     content = msg.get("content")
-            # Если нет, пробуем другие возможные поля
+            # Если не нашли, пробуем другие возможные поля
             if not content and "content" in data:
                 content = data["content"]
             if not content and "response" in data:
@@ -342,14 +342,13 @@ def analyze_with_deepseek(file_paths):
             print(f"Содержимое data: {json.dumps(data, ensure_ascii=False)[:500]}")
             raise Exception("Пустой ответ от KodikRouter")
     except Exception as e:
-        print(f"Ошибка: {e}")
+        print(f"Ошибка DeepSeek: {e}")
         if hasattr(e, 'response') and e.response is not None:
             print(f"Тело ошибки: {e.response.text[:500]}")
         raise
 
 # ========== 5. ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ==========
 def process_purchase(data):
-    # 1. Поиск/создание компании
     company_id = find_company_by_inn(data["inn"])
     if not company_id:
         company_id = create_company(data["company_name"], data["inn"])
@@ -357,19 +356,16 @@ def process_purchase(data):
     else:
         print(f"Компания уже существует, ID {company_id}")
 
-    # 2. Контакт и сделка
     create_contact(data.get("contact_name"), data.get("phone"), data.get("email"), company_id)
     deal_id = create_deal(company_id, data["company_name"], data.get("purchase_link", ""))
     print(f"Создана сделка ID {deal_id}")
 
-    # 3. Поиск папки в Google Drive
     purchase_number = data["purchase_number"]
     print(f"Поиск папки для закупки {purchase_number}...")
     subfolder_id = find_subfolder_id_by_api(GOOGLE_DRIVE_ROOT_FOLDER_ID, purchase_number)
     if not subfolder_id:
         return {"status": "error", "message": f"Не найдена подпапка с именем {purchase_number}"}
 
-    # 4. Скачивание файлов
     temp_dir = tempfile.mkdtemp()
     try:
         downloaded_files = download_folder_by_id(subfolder_id, temp_dir)
@@ -379,11 +375,9 @@ def process_purchase(data):
         for f in downloaded_files:
             print(f"  - {os.path.basename(f)}")
 
-        # 5. Анализ через DeepSeek
         print("Отправка файлов в DeepSeek...")
         analysis = analyze_with_deepseek(downloaded_files)
 
-        # 6. Комментарий в сделку
         comment_text = f"🤖 Анализ от DeepSeek (модель {DEEPSEEK_MODEL}):\n\n{analysis}"
         add_comment_to_deal(deal_id, comment_text)
         print("Комментарий добавлен в сделку")
