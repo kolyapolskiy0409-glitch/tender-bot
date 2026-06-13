@@ -317,17 +317,13 @@ def analyze_with_deepseek(file_paths):
         print(f"Статус ответа KodikRouter: {response.status_code}")
         response.raise_for_status()
         data = response.json()
-        # Выводим ключи ответа для диагностики
         print(f"Ключи ответа: {list(data.keys()) if isinstance(data, dict) else 'не словарь'}")
-        # Извлекаем content
         content = None
         if isinstance(data, dict):
-            # Стандартный формат OpenAI
             if "choices" in data and len(data["choices"]) > 0:
                 msg = data["choices"][0].get("message")
                 if msg and isinstance(msg, dict):
                     content = msg.get("content")
-            # Если не нашли, пробуем другие возможные поля
             if not content and "content" in data:
                 content = data["content"]
             if not content and "response" in data:
@@ -340,11 +336,12 @@ def analyze_with_deepseek(file_paths):
         else:
             print(f"Не удалось извлечь content. Тип data: {type(data)}")
             print(f"Содержимое data: {json.dumps(data, ensure_ascii=False)[:500]}")
-            raise Exception("Пустой ответ от KodikRouter")
+            return "Ошибка: не удалось получить ответ от модели"
     except Exception as e:
         print(f"Ошибка DeepSeek: {e}")
         if hasattr(e, 'response') and e.response is not None:
             print(f"Тело ошибки: {e.response.text[:500]}")
+        return f"Ошибка при обращении к KodikRouter: {str(e)}"
         raise
 
 # ========== 5. ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ==========
@@ -377,12 +374,21 @@ def process_purchase(data):
 
         print("Отправка файлов в DeepSeek...")
         analysis = analyze_with_deepseek(downloaded_files)
-
+        print(f"Analysis type: {type(analysis)}, length: {len(analysis) if analysis else 0}")
+        
+        # Принудительно делаем строкой
+        if not isinstance(analysis, str):
+            analysis = str(analysis)
+        if not analysis:
+            analysis = "Анализ не получен"
+        
         comment_text = f"🤖 Анализ от DeepSeek (модель {DEEPSEEK_MODEL}):\n\n{analysis}"
         add_comment_to_deal(deal_id, comment_text)
         print("Комментарий добавлен в сделку")
 
-        return {"status": "success", "deal_id": deal_id, "analysis_preview": analysis[:300]}
+        # Безопасное получение preview
+        analysis_preview = (analysis[:300] if analysis and len(analysis) > 300 else analysis)
+        return {"status": "success", "deal_id": deal_id, "analysis_preview": analysis_preview}
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
