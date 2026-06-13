@@ -11,4 +11,3 @@ PyPDF2
 python-docx
 openpyxl
 gdown
-p2d-deepseek
