@@ -312,7 +312,7 @@ def analyze_with_deepseek(file_paths):
         "model": DEEPSEEK_MODEL,
         "messages": [{"role": "user", "content": user_prompt}],
         "temperature": 0.3,
-        "max_tokens": 4000
+        "max_tokens": 20000
     }
     try:
         print("Отправка запроса к KodikRouter...")
