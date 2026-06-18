@@ -320,7 +320,7 @@ def analyze_with_deepseek(file_paths):
     }
     try:
         print("Отправка запроса к KodikRouter...")
-        response = requests.post(DEEPSEEK_URL, headers=headers, json=payload, timeout=300)
+        response = requests.post(DEEPSEEK_URL, headers=headers, json=payload, timeout=600)
         print(f"Статус ответа KodikRouter: {response.status_code}")
         response.raise_for_status()
         data = response.json()
