@@ -299,13 +299,26 @@ def extract_text_from_file(file_path):
         elif ext == '.txt':
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 return f.read()
-        elif ext in ('.xls', '.xlsx'):
+        elif ext == '.xlsx':
             import openpyxl
             wb = openpyxl.load_workbook(file_path, data_only=True)
             text = ""
             for sheet in wb.worksheets:
                 for row in sheet.iter_rows(values_only=True):
                     text += " ".join(str(cell) for cell in row if cell) + "\n"
+            return text
+        elif ext == '.xls':
+            import xlrd
+            wb = xlrd.open_workbook(file_path)
+            text = ""
+            for sheet in wb.sheets():
+                for row in range(sheet.nrows):
+                    row_text = []
+                    for col in range(sheet.ncols):
+                        cell = sheet.cell(row, col)
+                        if cell.ctype != xlrd.XL_CELL_EMPTY:
+                            row_text.append(str(cell.value))
+                    text += " ".join(row_text) + "\n"
             return text
         else:
             return ""
@@ -388,32 +401,54 @@ def process_purchase(data):
     if not subfolder_id:
         return {"status": "error", "message": f"Не найдена подпапка с именем {purchase_number}"}
 
-    # Формируем ссылку на папку в Google Drive
     drive_folder_link = f"https://drive.google.com/drive/folders/{subfolder_id}"
 
     # 4. Создаём сделку
     deal_id = create_deal(company_id, data["company_name"], data.get("purchase_link", ""), drive_folder_link)
     print(f"Создана сделка ID {deal_id}")
 
-    # 5. Привязываем ВСЕ контакты компании к сделке
+    # 5. Привязываем созданный контакт к сделке (если он есть)
+    if contact_id:
+        try:
+            call_bitrix24("crm.deal.contact.add", {
+                "id": deal_id,
+                "fields": {"CONTACT_ID": contact_id}
+            })
+            print(f"Контакт {contact_id} привязан к сделке {deal_id}")
+        except Exception as e:
+            print(f"Ошибка при привязке контакта к сделке: {e}")
+    else:
+        print("Контакт не создан, пропускаем привязку")
+
+    # 6. Скачиваем файлы и анализируем
+    temp_dir = tempfile.mkdtemp()
     try:
-        contacts_response = call_bitrix24("crm.company.contact.get", {
-            "id": company_id
-        })
-        if contacts_response.get("result"):
-            print(f"Найдено {len(contacts_response['result'])} контактов у компании {company_id}")
-            for contact in contacts_response["result"]:
-                contact_id_existing = contact["CONTACT_ID"]
-                call_bitrix24("crm.deal.contact.add", {
-                    "id": deal_id,
-                    "fields": {"CONTACT_ID": contact_id_existing}
-                })
-                print(f"Контакт {contact_id_existing} привязан к сделке {deal_id}")
-        else:
-            print(f"У компании {company_id} нет контактов")
-    except Exception as e:
-        print(f"Ошибка при привязке контактов к сделке: {e}")
-        # Продолжаем выполнение, даже если привязка не удалась
+        downloaded_files = download_folder_by_id(subfolder_id, temp_dir)
+        if not downloaded_files:
+            return {"status": "error", "message": f"Не удалось скачать файлы из папки {purchase_number}"}
+        print(f"Скачано файлов: {len(downloaded_files)}")
+        for f in downloaded_files:
+            print(f"  - {os.path.basename(f)}")
+
+        print("Отправка файлов в DeepSeek...")
+        analysis = analyze_with_deepseek(downloaded_files)
+        if not isinstance(analysis, str):
+            analysis = str(analysis)
+        if not analysis:
+            analysis = "Анализ не получен"
+
+        comment_text = f"🤖 Анализ от DeepSeek (модель {DEEPSEEK_MODEL}):\n\n{analysis}"
+        add_comment_to_deal(deal_id, comment_text)
+        print("Комментарий добавлен в сделку")
+
+        analysis_preview = analysis[:300] if analysis and len(analysis) > 300 else (analysis or "Нет текста")
+        return {
+            "status": "success",
+            "deal_id": deal_id,
+            "analysis_preview": analysis_preview
+        }
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
     # 6. Скачиваем файлы из папки для анализа
     temp_dir = tempfile.mkdtemp()
