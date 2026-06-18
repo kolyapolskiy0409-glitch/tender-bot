@@ -296,6 +296,11 @@ def extract_text_from_file(file_path):
             import docx
             doc = docx.Document(file_path)
             return "\n".join([p.text for p in doc.paragraphs])
+        elif ext == '.doc':
+            # Используем textract для старых .doc
+            import textract
+            text = textract.process(file_path).decode('utf-8', errors='ignore')
+            return text
         elif ext == '.txt':
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 return f.read()
@@ -321,7 +326,9 @@ def extract_text_from_file(file_path):
                     text += " ".join(row_text) + "\n"
             return text
         else:
-            return ""
+            # Пробуем прочитать как текстовый файл
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                return f.read()
     except Exception as e:
         print(f"Ошибка извлечения текста из {file_path}: {e}")
         return ""
