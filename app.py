@@ -109,9 +109,58 @@ def create_company(company_name, inn):
     })
     return company_id
 
+def find_contact_by_email_or_phone(email, phone):
+    """Ищет контакт в Битрикс24 по email или телефону. Возвращает ID или None."""
+    if not email and not phone:
+        return None
+    
+    # Сначала пробуем найти по email (точное совпадение)
+    if email:
+        result = call_bitrix24("crm.contact.list", {
+            "filter": {"EMAIL": email},
+            "select": ["ID"]
+        })
+        if result.get("result") and len(result["result"]) > 0:
+            contact_id = result["result"][0]["ID"]
+            print(f"[LOG] Найден существующий контакт по email {email}: ID {contact_id}")
+            return contact_id
+    
+    # Если email не найден или нет email, пробуем по телефону (точное совпадение)
+    if phone:
+        result = call_bitrix24("crm.contact.list", {
+            "filter": {"PHONE": phone},
+            "select": ["ID"]
+        })
+        if result.get("result") and len(result["result"]) > 0:
+            contact_id = result["result"][0]["ID"]
+            print(f"[LOG] Найден существующий контакт по телефону {phone}: ID {contact_id}")
+            return contact_id
+    
+    print("[LOG] Контакт не найден, будем создавать новый")
+    return None
+
 def create_contact(name, phone, email, company_id):
     if not any([name, phone, email]):
         return None
+    
+    # Проверяем, есть ли уже такой контакт
+    existing_contact_id = find_contact_by_email_or_phone(email, phone)
+    if existing_contact_id:
+        # Если контакт уже существует, просто привязываем его к компании (если ещё не привязан)
+        print(f"[LOG] Используем существующий контакт ID {existing_contact_id}")
+        # Проверяем, привязан ли контакт к компании
+        check = call_bitrix24("crm.company.contact.get", {"id": company_id})
+        if check.get("result"):
+            already_linked = any(c["CONTACT_ID"] == existing_contact_id for c in check["result"])
+            if not already_linked:
+                call_bitrix24("crm.company.contact.add", {
+                    "id": company_id,
+                    "fields": {"CONTACT_ID": existing_contact_id}
+                })
+                print(f"[LOG] Контакт {existing_contact_id} привязан к компании {company_id}")
+        return existing_contact_id
+    
+    # Если контакт не найден, создаём новый
     contact_res = call_bitrix24("crm.contact.add", {
         "fields": {
             "NAME": name or "",
@@ -125,6 +174,7 @@ def create_contact(name, phone, email, company_id):
             "id": company_id,
             "fields": {"CONTACT_ID": contact_id}
         })
+        print(f"[LOG] Создан новый контакт ID {contact_id} и привязан к компании {company_id}")
     return contact_id
 
 def create_deal(company_id, deal_name, purchase_link, drive_folder_link):
