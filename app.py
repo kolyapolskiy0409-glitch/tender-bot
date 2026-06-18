@@ -344,6 +344,9 @@ def extract_text_from_file(file_path):
 
 # ========== 4. ФУНКЦИЯ ДЛЯ DEEPSEEK ==========
 def analyze_with_deepseek(file_paths):
+    import time
+    start_time = time.time()
+    
     full_text = ""
     for path in file_paths:
         text = extract_text_from_file(path)
@@ -366,14 +369,20 @@ def analyze_with_deepseek(file_paths):
         "model": DEEPSEEK_MODEL,
         "messages": [{"role": "user", "content": user_prompt}],
         "temperature": 0.3,
-        "max_tokens": 8000
+        "max_tokens": 32000  # <--- Увеличили с 8000 до 32000
     }
     try:
         print("Отправка запроса к KodikRouter...")
-        response = requests.post(DEEPSEEK_URL, headers=headers, json=payload, timeout=600)
+        response = requests.post(DEEPSEEK_URL, headers=headers, json=payload, timeout=300)
         print(f"Статус ответа KodikRouter: {response.status_code}")
         response.raise_for_status()
         data = response.json()
+        
+        # Логируем finish_reason и длину ответа
+        if "choices" in data and len(data["choices"]) > 0:
+            finish_reason = data["choices"][0].get("finish_reason")
+            print(f"finish_reason: {finish_reason}")
+        
         content = None
         if isinstance(data, dict):
             if "choices" in data and len(data["choices"]) > 0:
@@ -386,6 +395,10 @@ def analyze_with_deepseek(file_paths):
                 content = data["response"]
         elif isinstance(data, str):
             content = data
+        
+        elapsed = time.time() - start_time
+        print(f"Время обработки запроса: {elapsed:.2f} сек")
+        
         if content and isinstance(content, str):
             return content
         else:
