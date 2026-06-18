@@ -268,12 +268,25 @@ def find_subfolder_id_by_api(parent_folder_id, target_name):
 
 def download_folder_by_id(folder_id, destination_dir):
     try:
+        # Проверяем, есть ли файлы в папке (через gdown.list_folder)
+        try:
+            folder_contents = gdown.list_folder(folder_id, use_cookies=False)
+            file_count = sum(1 for item in folder_contents if item['type'] == 'file')
+            print(f"В папке {folder_id} найдено {file_count} файлов")
+            if file_count == 0:
+                print("Папка пуста, скачивание не требуется")
+                return []
+        except Exception as e:
+            print(f"Не удалось проверить содержимое папки: {e}")
+        
+        print(f"Скачивание папки с ID {folder_id} через gdown...")
         gdown.download_folder(id=folder_id, output=destination_dir, use_cookies=False, quiet=False)
         downloaded_files = []
         for root, dirs, files in os.walk(destination_dir):
             for file in files:
                 if not file.endswith('.html') and not file.startswith('.'):
                     downloaded_files.append(os.path.join(root, file))
+        print(f"Скачано файлов: {len(downloaded_files)}")
         return downloaded_files
     except Exception as e:
         print(f"Ошибка скачивания папки {folder_id}: {e}")
@@ -430,13 +443,15 @@ def process_purchase(data):
     # 6. Скачиваем файлы и анализируем
     temp_dir = tempfile.mkdtemp()
     try:
-        downloaded_files = download_folder_by_id(subfolder_id, temp_dir)
-        if not downloaded_files:
-            return {"status": "error", "message": f"Не удалось скачать файлы из папки {purchase_number}"}
+      downloaded_files = download_folder_by_id(subfolder_id, temp_dir)
+if not downloaded_files:
+    return {"status": "error", "message": f"Папка {purchase_number} на Google Диске пуста или не содержит поддерживаемых файлов. Проверьте, что файлы загружены."}
         print(f"Скачано файлов: {len(downloaded_files)}")
         for f in downloaded_files:
             print(f"  - {os.path.basename(f)}")
-
+downloaded_files = download_folder_by_id(subfolder_id, temp_dir)
+if not downloaded_files:
+    return {"status": "error", "message": f"Папка {purchase_number} на Google Диске пуста или не содержит поддерживаемых файлов. Проверьте, что файлы загружены."}
         # 7. Анализ через KodikRouter
         print("Отправка файлов в DeepSeek...")
         analysis = analyze_with_deepseek(downloaded_files)
