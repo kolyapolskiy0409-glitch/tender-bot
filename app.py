@@ -4,6 +4,7 @@ import json
 import tempfile
 import shutil
 import requests
+import traceback
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 import gdown
@@ -61,7 +62,7 @@ def find_company_by_inn(inn):
     inn_clean = inn.strip()
     print(f"[LOG] ИНН после очистки: '{inn_clean}' (длина {len(inn_clean)})")
     filter_params = {"RQ_INN": inn_clean, "ENTITY_TYPE_ID": 4}
-    print(f"[LOG] Фильтр для crm.requisite.list: {json.dumps(filter_params, ensure_ascii=False)}")
+    print(f"[LOG] Фильтр para crm.requisite.list: {json.dumps(filter_params, ensure_ascii=False)}")
     result = call_bitrix24("crm.requisite.list", {
         "filter": filter_params,
         "select": ["ID", "ENTITY_ID"]
@@ -251,10 +252,15 @@ def extract_text_from_file(file_path):
             import docx
             doc = docx.Document(file_path)
             return "\n".join([p.text for p in doc.paragraphs])
-        elif ext in ['.doc']:
-            # Пробуем прочитать как текст (старые .doc часто бинарные, но это лучше, чем ничего)
+        elif ext == '.doc':
+            # Пробуем прочитать как текст (бинарный файл даст мусор, но это лучше, чем ничего)
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                return f.read()
+                content = f.read()
+                if len(content) > 50:
+                    return content
+                else:
+                    print(f"Файл {file_path} содержит мало текста, возможно бинарный")
+                    return None
         elif ext == '.txt':
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 return f.read()
@@ -280,14 +286,13 @@ def extract_text_from_file(file_path):
                     text += " ".join(row_text) + "\n"
             return text
         else:
-            # пробуем как текст
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 return f.read()
     except Exception as e:
         print(f"Ошибка извлечения текста из {file_path}: {e}")
         return None
 
-# ========== 4. ФУНКЦИЯ ДЛЯ DEEPSEEK (через KodikRouter) ==========
+# ========== 4. ФУНКЦИЯ ДЛЯ DEEPSEEK ==========
 def analyze_with_deepseek(file_paths):
     full_text = ""
     for path in file_paths:
@@ -343,77 +348,68 @@ def analyze_with_deepseek(file_paths):
             print(f"Тело ошибки: {e.response.text[:500]}")
         return f"Ошибка при обращении к KodikRouter: {str(e)}"
 
-# ========== 5. ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ==========
+# ========== 5. ОСНОВНАЯ ЛОГИКА ==========
 def process_purchase(data):
-    # 1. Поиск/создание компании
-    company_id = find_company_by_inn(data["inn"])
-    if not company_id:
-        company_id = create_company(data["company_name"], data["inn"])
-        print(f"Создана новая компания ID {company_id}")
-    else:
-        print(f"Компания уже существует, ID {company_id}")
-
-    # 2. Создание контакта (если есть данные)
-    contact_id = create_contact(data.get("contact_name"), data.get("phone"), data.get("email"), company_id)
-    if contact_id:
-        print(f"Создан контакт ID {contact_id} и привязан к компании {company_id}")
-
-    # 3. Поиск папки в Google Drive
-    purchase_number = data["purchase_number"]
-    print(f"Поиск папки для закупки {purchase_number}...")
-    subfolder_id = find_subfolder_id_by_api(GOOGLE_DRIVE_ROOT_FOLDER_ID, purchase_number)
-    if not subfolder_id:
-        return {"status": "error", "message": f"Не найдена подпапка с именем {purchase_number}"}
-
-    drive_folder_link = f"https://drive.google.com/drive/folders/{subfolder_id}"
-
-    # 4. Создаём сделку
-    deal_id = create_deal(company_id, data["company_name"], data.get("purchase_link", ""), drive_folder_link)
-    print(f"Создана сделка ID {deal_id}")
-
-    # 5. Привязываем контакт к сделке
-    if contact_id:
-        try:
-            call_bitrix24("crm.deal.contact.add", {
-                "id": deal_id,
-                "fields": {"CONTACT_ID": contact_id}
-            })
-            print(f"Контакт {contact_id} привязан к сделке {deal_id}")
-        except Exception as e:
-            print(f"Ошибка при привязке контакта к сделке: {e}")
-    else:
-        print("Контакт не создан, пропускаем привязку")
-
-    # 6. Скачиваем файлы и анализируем
-    temp_dir = tempfile.mkdtemp()
     try:
-        downloaded_files = download_folder_by_id(subfolder_id, temp_dir)
-        if not downloaded_files:
-            return {"status": "error", "message": f"Папка {purchase_number} пуста или не содержит поддерживаемых файлов. Проверьте, что файлы загружены."}
+        print(f"[PROCESS] Начало обработки закупки {data.get('purchase_number', 'N/A')}")
+        company_id = find_company_by_inn(data["inn"])
+        if not company_id:
+            company_id = create_company(data["company_name"], data["inn"])
+            print(f"Создана новая компания ID {company_id}")
+        else:
+            print(f"Компания уже существует, ID {company_id}")
 
-        print(f"Скачано файлов: {len(downloaded_files)}")
-        for f in downloaded_files:
-            print(f"  - {os.path.basename(f)}")
+        contact_id = create_contact(data.get("contact_name"), data.get("phone"), data.get("email"), company_id)
+        if contact_id:
+            print(f"Создан контакт ID {contact_id} и привязан к компании {company_id}")
 
-        print("Отправка файлов в DeepSeek...")
-        analysis = analyze_with_deepseek(downloaded_files)
-        if not isinstance(analysis, str):
-            analysis = str(analysis)
-        if not analysis:
-            analysis = "Анализ не получен"
+        purchase_number = data["purchase_number"]
+        print(f"Поиск папки для закупки {purchase_number}...")
+        subfolder_id = find_subfolder_id_by_api(GOOGLE_DRIVE_ROOT_FOLDER_ID, purchase_number)
+        if not subfolder_id:
+            return {"status": "error", "message": f"Не найдена подпапка с именем {purchase_number}"}
 
-        comment_text = f"🤖 Анализ от DeepSeek (модель {DEEPSEEK_MODEL}):\n\n{analysis}"
-        add_comment_to_deal(deal_id, comment_text)
-        print("Комментарий добавлен в сделку")
+        drive_folder_link = f"https://drive.google.com/drive/folders/{subfolder_id}"
+        deal_id = create_deal(company_id, data["company_name"], data.get("purchase_link", ""), drive_folder_link)
+        print(f"Создана сделка ID {deal_id}")
 
-        analysis_preview = analysis[:300] if analysis and len(analysis) > 300 else (analysis or "Нет текста")
-        return {
-            "status": "success",
-            "deal_id": deal_id,
-            "analysis_preview": analysis_preview
-        }
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        if contact_id:
+            try:
+                call_bitrix24("crm.deal.contact.add", {"id": deal_id, "fields": {"CONTACT_ID": contact_id}})
+                print(f"Контакт {contact_id} привязан к сделке {deal_id}")
+            except Exception as e:
+                print(f"Ошибка при привязке контакта: {e}")
+
+        print("[PROCESS] Начинаем скачивание файлов...")
+        temp_dir = tempfile.mkdtemp()
+        try:
+            downloaded_files = download_folder_by_id(subfolder_id, temp_dir)
+            if not downloaded_files:
+                return {"status": "error", "message": f"Папка {purchase_number} пуста или не содержит поддерживаемых файлов. Проверьте, что файлы загружены."}
+
+            print(f"Скачано файлов: {len(downloaded_files)}")
+            for f in downloaded_files:
+                print(f"  - {os.path.basename(f)}")
+
+            print("[PROCESS] Отправка в DeepSeek...")
+            analysis = analyze_with_deepseek(downloaded_files)
+            if not isinstance(analysis, str):
+                analysis = str(analysis)
+            if not analysis:
+                analysis = "Анализ не получен"
+
+            comment_text = f"🤖 Анализ от DeepSeek (модель {DEEPSEEK_MODEL}):\n\n{analysis}"
+            add_comment_to_deal(deal_id, comment_text)
+            print("[PROCESS] Комментарий добавлен в сделку")
+
+            analysis_preview = analysis[:300] if analysis and len(analysis) > 300 else (analysis or "Нет текста")
+            return {"status": "success", "deal_id": deal_id, "analysis_preview": analysis_preview}
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+    except Exception as e:
+        print(f"[PROCESS] КРИТИЧЕСКАЯ ОШИБКА: {e}")
+        traceback.print_exc()
+        return {"status": "error", "message": str(e)}
 
 # ========== 6. FLASK-ЭНДПОИНТ ==========
 @api.route('/process', methods=['POST'])
@@ -427,13 +423,15 @@ def process_webhook():
             if field not in data:
                 return jsonify({"status": "error", "message": f"Отсутствует поле '{field}'"}), 400
         result = process_purchase(data)
-        print(f"Ответ сервера: {json.dumps(result, ensure_ascii=False)[:500]}")
+        print(f"[FLASK] Ответ: {json.dumps(result, ensure_ascii=False)[:500]}")
         return jsonify(result)
     except Exception as e:
-        print(f"Ошибка в процессе обработки: {e}")
+        print(f"[FLASK] Ошибка: {e}")
+        traceback.print_exc()
         return jsonify({"status": "error", "message": str(e)}), 500
 
 # ========== 7. ЗАПУСК ==========
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
+    print(f"[SERVER] Запуск на порту {port}")
     api.run(host='0.0.0.0', port=port)
