@@ -28,7 +28,7 @@ DEEPSEEK_MODEL = "deepseek/deepseek-v4-pro"
 PROMPT = """
 Во вложении техническая документация по закупке.
 Проанализируй документы и предоставь подробную информацию в отчет удобный для копирования в документ WORD:
-(ваш полный промпт)
+(вставьте ваш полный промпт)
 """
 
 # ========== 2. ФУНКЦИИ БИТРИКС24 ==========
@@ -220,18 +220,8 @@ def find_subfolder_id_by_api(parent_folder_id, target_name):
 
 def download_folder_by_id(folder_id, destination_dir):
     try:
-        # Проверяем содержимое папки через gdown (если возможно)
-        try:
-            folder_contents = gdown.list_folder(folder_id, use_cookies=False)
-            file_count = sum(1 for item in folder_contents if item['type'] == 'file')
-            print(f"В папке {folder_id} найдено {file_count} файлов")
-            if file_count == 0:
-                print("Папка пуста, скачивание не требуется")
-                return []
-        except Exception as e:
-            print(f"Не удалось проверить содержимое папки: {e}")
-
         print(f"Скачивание папки с ID {folder_id} через gdown...")
+        # Убираем проверку list_folder, так как в некоторых версиях gdown её нет
         gdown.download_folder(id=folder_id, output=destination_dir, use_cookies=False, quiet=False)
         downloaded_files = []
         for root, dirs, files in os.walk(destination_dir):
@@ -263,14 +253,18 @@ def extract_text_from_file(file_path):
             doc = docx.Document(file_path)
             return "\n".join([p.text for p in doc.paragraphs])
         elif ext == '.doc':
+            # Пытаемся прочитать через textract, если не получается — возвращаем None
             try:
                 import textract
                 text = textract.process(file_path).decode('utf-8', errors='ignore')
-                return text
+                if text.strip():
+                    return text
+                else:
+                    print(f"textract вернул пустой текст для .doc файла: {file_path}")
+                    return None
             except Exception as e:
-                print(f"textract не справился с .doc: {e}, пробуем прочитать как текст")
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    return f.read()
+                print(f"textract не справился с .doc: {e}, пропускаем файл")
+                return None
         elif ext == '.txt':
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 return f.read()
