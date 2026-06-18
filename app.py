@@ -430,36 +430,6 @@ def process_purchase(data):
         for f in downloaded_files:
             print(f"  - {os.path.basename(f)}")
 
-        print("Отправка файлов в DeepSeek...")
-        analysis = analyze_with_deepseek(downloaded_files)
-        if not isinstance(analysis, str):
-            analysis = str(analysis)
-        if not analysis:
-            analysis = "Анализ не получен"
-
-        comment_text = f"🤖 Анализ от DeepSeek (модель {DEEPSEEK_MODEL}):\n\n{analysis}"
-        add_comment_to_deal(deal_id, comment_text)
-        print("Комментарий добавлен в сделку")
-
-        analysis_preview = analysis[:300] if analysis and len(analysis) > 300 else (analysis or "Нет текста")
-        return {
-            "status": "success",
-            "deal_id": deal_id,
-            "analysis_preview": analysis_preview
-        }
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-
-    # 6. Скачиваем файлы из папки для анализа
-    temp_dir = tempfile.mkdtemp()
-    try:
-        downloaded_files = download_folder_by_id(subfolder_id, temp_dir)
-        if not downloaded_files:
-            return {"status": "error", "message": f"Не удалось скачать файлы из папки {purchase_number}"}
-        print(f"Скачано файлов: {len(downloaded_files)}")
-        for f in downloaded_files:
-            print(f"  - {os.path.basename(f)}")
-
         # 7. Анализ через KodikRouter
         print("Отправка файлов в DeepSeek...")
         analysis = analyze_with_deepseek(downloaded_files)
@@ -482,7 +452,6 @@ def process_purchase(data):
         }
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
-
 # ========== 6. FLASK-ЭНДПОИНТ ==========
 @api.route('/process', methods=['POST'])
 def process_webhook():
