@@ -91,18 +91,40 @@ def get_enum_value_id(field_name, target_value):
     raise Exception(f"Значение '{target_value}' не найдено для поля {field_name}")
 
 def find_company_by_inn(inn):
-    result = call_bitrix24("crm.requisite.list", {
-        "filter": {"RQ_INN": inn},
-        "select": ["ID", "ENTITY_TYPE_ID", "ENTITY_ID"]
-    })
-    if result.get("error"):
-        print(f"Ошибка поиска реквизитов: {result['error']}")
+    print(f"[LOG] Поиск компании по ИНН: '{inn}' (длина {len(inn) if inn else 0})")
+    if not inn or inn.strip() == '':
+        print("[LOG] ИНН пустой, возвращаем None")
         return None
+
+    inn_clean = inn.strip()
+    print(f"[LOG] ИНН после очистки: '{inn_clean}' (длина {len(inn_clean)})")
+
+    # Правильный фильтр: ищем реквизит с нужным ИНН, принадлежащий компании
+    filter_params = {
+        "RQ_INN": inn_clean,
+        "ENTITY_TYPE_ID": 4  # 4 — это идентификатор типа "Компания"
+    }
+    print(f"[LOG] Фильтр для crm.requisite.list: {json.dumps(filter_params, ensure_ascii=False)}")
+    
+    result = call_bitrix24("crm.requisite.list", {
+        "filter": filter_params,
+        "select": ["ID", "ENTITY_ID"]  # Нам нужен только ID связанной компании
+    })
+    print(f"[LOG] Ответ от crm.requisite.list (первые 500 символов): {json.dumps(result, ensure_ascii=False)[:500]}")
+
+    if result.get("error"):
+        print(f"[LOG] Ошибка поиска реквизитов: {result['error']}")
+        return None
+
     if result.get("result"):
-        for req in result["result"]:
-            if req.get("ENTITY_TYPE_ID") == 4:
-                return req.get("ENTITY_ID")
-    return None
+        # Берем первый найденный реквизит
+        requisite = result["result"][0]
+        company_id = requisite.get("ENTITY_ID")
+        print(f"[LOG] Найдена компания с ID {company_id} для ИНН {inn_clean}")
+        return company_id
+    else:
+        print("[LOG] Реквизиты с таким ИНН не найдены")
+        return None
 
 def create_company(company_name, inn):
     direction_id = get_enum_value_id(FIELD_COMPANY_DIRECTION, "НВ")
