@@ -397,11 +397,9 @@ def process_purchase(data):
 
     # 5. Привязываем ВСЕ контакты компании к сделке
     try:
-        # Получаем все контакты компании
         contacts_response = call_bitrix24("crm.company.contact.get", {
             "id": company_id
         })
-        
         if contacts_response.get("result"):
             print(f"Найдено {len(contacts_response['result'])} контактов у компании {company_id}")
             for contact in contacts_response["result"]:
@@ -415,8 +413,19 @@ def process_purchase(data):
             print(f"У компании {company_id} нет контактов")
     except Exception as e:
         print(f"Ошибка при привязке контактов к сделке: {e}")
+        # Продолжаем выполнение, даже если привязка не удалась
 
-        # 6. Анализ через KodikRouter
+    # 6. Скачиваем файлы из папки для анализа
+    temp_dir = tempfile.mkdtemp()
+    try:
+        downloaded_files = download_folder_by_id(subfolder_id, temp_dir)
+        if not downloaded_files:
+            return {"status": "error", "message": f"Не удалось скачать файлы из папки {purchase_number}"}
+        print(f"Скачано файлов: {len(downloaded_files)}")
+        for f in downloaded_files:
+            print(f"  - {os.path.basename(f)}")
+
+        # 7. Анализ через KodikRouter
         print("Отправка файлов в DeepSeek...")
         analysis = analyze_with_deepseek(downloaded_files)
         if not isinstance(analysis, str):
@@ -424,12 +433,12 @@ def process_purchase(data):
         if not analysis:
             analysis = "Анализ не получен"
 
-        # 7. Добавляем комментарий в сделку
+        # 8. Добавляем комментарий в сделку
         comment_text = f"🤖 Анализ от DeepSeek (модель {DEEPSEEK_MODEL}):\n\n{analysis}"
         add_comment_to_deal(deal_id, comment_text)
         print("Комментарий добавлен в сделку")
 
-        # 8. Возвращаем ответ для Google Sheets
+        # 9. Возвращаем ответ для Google Sheets
         analysis_preview = analysis[:300] if analysis and len(analysis) > 300 else (analysis or "Нет текста")
         return {
             "status": "success",
