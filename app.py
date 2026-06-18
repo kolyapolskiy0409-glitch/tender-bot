@@ -28,7 +28,7 @@ DEEPSEEK_MODEL = "deepseek/deepseek-v4-pro"
 PROMPT = """
 Во вложении техническая документация по закупке.
 Проанализируй документы и предоставь подробную информацию в отчет удобный для копирования в документ WORD:
-(вставьте ваш полный промпт)
+(ваш полный промпт)
 """
 
 # ========== 2. ФУНКЦИИ БИТРИКС24 ==========
@@ -221,7 +221,6 @@ def find_subfolder_id_by_api(parent_folder_id, target_name):
 def download_folder_by_id(folder_id, destination_dir):
     try:
         print(f"Скачивание папки с ID {folder_id} через gdown...")
-        # Убираем проверку list_folder, так как в некоторых версиях gdown её нет
         gdown.download_folder(id=folder_id, output=destination_dir, use_cookies=False, quiet=False)
         downloaded_files = []
         for root, dirs, files in os.walk(destination_dir):
@@ -252,19 +251,10 @@ def extract_text_from_file(file_path):
             import docx
             doc = docx.Document(file_path)
             return "\n".join([p.text for p in doc.paragraphs])
-        elif ext == '.doc':
-            # Пытаемся прочитать через textract, если не получается — возвращаем None
-            try:
-                import textract
-                text = textract.process(file_path).decode('utf-8', errors='ignore')
-                if text.strip():
-                    return text
-                else:
-                    print(f"textract вернул пустой текст для .doc файла: {file_path}")
-                    return None
-            except Exception as e:
-                print(f"textract не справился с .doc: {e}, пропускаем файл")
-                return None
+        elif ext in ['.doc']:
+            # Пробуем прочитать как текст (старые .doc часто бинарные, но это лучше, чем ничего)
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                return f.read()
         elif ext == '.txt':
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 return f.read()
