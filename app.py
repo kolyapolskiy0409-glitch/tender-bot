@@ -323,21 +323,48 @@ def extract_text_from_file(file_path):
     print(f"Попытка извлечь текст из: {file_path} (расширение {ext})")
     try:
         if ext == '.pdf':
+            # Пробуем pdfplumber (он лучше читает текстовые PDF)
+            try:
+                import pdfplumber
+                text = ""
+                with pdfplumber.open(file_path) as pdf:
+                    print(f"PDF страниц: {len(pdf.pages)}")
+                    for page in pdf.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text += page_text + "\n"
+                if text.strip():
+                    print(f"Извлечено {len(text)} символов через pdfplumber")
+                    return text
+                else:
+                    print("pdfplumber не извлёк текст, пробуем PyPDF2...")
+            except Exception as e:
+                print(f"pdfplumber не сработал: {e}, пробуем PyPDF2...")
+
+            # Fallback на PyPDF2
             import PyPDF2
             text = ""
             with open(file_path, 'rb') as f:
                 reader = PyPDF2.PdfReader(f)
+                print(f"PyPDF2: страниц {len(reader.pages)}")
                 for page in reader.pages:
                     page_text = page.extract_text()
                     if page_text:
                         text += page_text + "\n"
-            return text
+            if text.strip():
+                print(f"Извлечено {len(text)} символов через PyPDF2")
+                return text
+            else:
+                print("PyPDF2 также не извлёк текст")
+                return None
+
         elif ext == '.docx':
             import docx
             doc = docx.Document(file_path)
-            return "\n".join([p.text for p in doc.paragraphs])
+            text = "\n".join([p.text for p in doc.paragraphs])
+            return text
+
         elif ext == '.doc':
-            # Пробуем прочитать как текст (бинарный файл даст мусор, но это лучше, чем ничего)
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
                 if len(content) > 50:
@@ -345,9 +372,11 @@ def extract_text_from_file(file_path):
                 else:
                     print(f"Файл {file_path} содержит мало текста, возможно бинарный")
                     return None
+
         elif ext == '.txt':
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 return f.read()
+
         elif ext == '.xlsx':
             import openpyxl
             wb = openpyxl.load_workbook(file_path, data_only=True)
@@ -356,6 +385,7 @@ def extract_text_from_file(file_path):
                 for row in sheet.iter_rows(values_only=True):
                     text += " ".join(str(cell) for cell in row if cell) + "\n"
             return text
+
         elif ext == '.xls':
             import xlrd
             wb = xlrd.open_workbook(file_path)
@@ -369,6 +399,7 @@ def extract_text_from_file(file_path):
                             row_text.append(str(cell.value))
                     text += " ".join(row_text) + "\n"
             return text
+
         else:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 return f.read()
